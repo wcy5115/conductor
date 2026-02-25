@@ -44,7 +44,7 @@ LLM_agent/
 │   ├── workflow_loader.py               ⏳ 待迁移
 │   ├── workflow_parser.py               ⏳ 待迁移
 │   ├── core/
-│   │   ├── logging.py                   ⏳ 待迁移
+│   │   ├── logging.py                   ✅ 已迁移 → src/core/logging.ts
 │   │   └── workflow_runner.py           ⏳ 待迁移
 │   ├── validators/
 │   │   ├── base.py                      ⏳ 待迁移
