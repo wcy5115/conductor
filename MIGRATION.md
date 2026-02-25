@@ -35,7 +35,7 @@ LLM_agent/
 │   ├── concurrent_utils.py              ⏳ 待迁移
 │   ├── cost_calculator.py               ✅ 已迁移 → src/cost_calculator.ts
 │   ├── llm_client.py                    ⏳ 待迁移
-│   ├── model_manager.py                 ⏳ 待迁移
+│   ├── model_manager.py                 ✅ 已迁移 → src/model_manager.ts
 │   ├── model_caller.py                  ⏳ 待迁移
 │   ├── conversation_manager.py          ⏳ 待迁移
 │   ├── pdf_to_images.py                 🚫 TS 生态替代方案待定
