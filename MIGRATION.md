@@ -31,7 +31,7 @@ LLM_agent/
 ├── src/
 │   ├── exceptions.py                    ✅ 已迁移 → src/exceptions.ts
 │   ├── safety.py                        🚫 视需求决定
-│   ├── utils.py                         ⏳ 待迁移
+│   ├── utils.py                         ✅ 已迁移 → src/utils.ts
 │   ├── concurrent_utils.py              ⏳ 待迁移
 │   ├── cost_calculator.py               ⏳ 待迁移
 │   ├── llm_client.py                    ⏳ 待迁移
