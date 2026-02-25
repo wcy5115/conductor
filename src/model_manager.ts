@@ -3,9 +3,11 @@
  * 用于处理模型简称到完整配置的映射
  */
 
-import { StructuredLogger } from "./core/logging";
-
-const logger = new StructuredLogger({ enableSystemLog: false, enableHumanLog: false });
+const logger = {
+  info: (msg: string) => console.info(msg),
+  warning: (msg: string) => console.warn(msg),
+  error: (msg: string) => console.error(msg),
+};
 
 // ========================================
 // 类型定义
