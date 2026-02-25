@@ -13,51 +13,69 @@ conductor 是 [LLM_agent](../LLM_agent) 的 TypeScript 重写版本。
 
 ---
 
-## 原项目模块 → TS 迁移对照
+## 迁移进度
 
-| Python 模块 | 说明 | TS 迁移状态 |
-|------------|------|------------|
-| `model_caller.py` | 统一模型调用接口 | 待迁移 |
-| `llm_client.py` | LLM 底层封装（OpenAI/OpenRouter） | 待迁移 |
-| `model_manager.py` | 模型配置管理 | 待迁移 |
-| `conversation_manager.py` | 多轮对话管理 | 待迁移 |
-| `workflow_engine.py` | 基于状态机的工作流引擎 | 待迁移 |
-| `workflow_loader.py` | YAML 加载，构建引擎实例 | 待迁移 |
-| `workflow_parser.py` | 工作流图（DAG）解析器 | 待迁移 |
-| `workflow_actions/llm_actions.py` | LLMCallAction、ConditionalLLMAction | 待迁移 |
-| `workflow_actions/concurrent_actions.py` | 并发处理列表项 | 待迁移 |
-| `workflow_actions/io_actions.py` | 文件读写、日志、合并 JSON | 待迁移 |
-| `workflow_actions/data_actions.py` | 数据处理、条件分支 | 待迁移 |
-| `workflow_actions/pdf_actions.py` | PDF 转图片 | 低优先级 |
-| `workflow_actions/ebook_actions.py` | ePub 处理 | 低优先级 |
-| `validators/` | JSON 格式与业务验证器 | 待迁移 |
-| `core/logging.py` | 结构化日志 | 待迁移 |
-| `core/workflow_runner.py` | 工作流高层运行器 | 待迁移 |
-| `exceptions.py` | 自定义异常 | 待迁移 |
-| `cost_calculator.py` | LLM 调用成本计算 | 待迁移 |
-| `concurrent_utils.py` | 并发工具函数 | 待迁移 |
-| `utils.py` | 通用工具（文件保存等） | 待迁移 |
-| `cli/` | 命令行清理工具 | 待迁移 |
+### 图例
 
----
+| 符号 | 含义 |
+|------|------|
+| `⏳` | 待迁移 |
+| `✅` | 已迁移 |
+| `🚫` | 无需迁移（archived / 测试辅助 / 低优先级） |
+| `🔀` | 合并/重构（注明目标位置） |
 
-## 核心概念保留
+### 原项目目录树
 
-以下原项目的核心设计在 TS 版本中保持不变：
-
-- **YAML 驱动**：工作流通过 `workflow.yaml` 声明，不写代码
-- **步骤类型系统**：`llm`、`concurrent`、`data_process` 等 type 映射到 Action 类
-- **三层 JSON 验证**：格式验证 → required 字段 → 业务验证器
-- **占位符系统**：`{text}`、`{item}`、`{index}`、`{1_response}` 等
-- **并发处理**：对列表并发执行，支持跳过已有输出文件
-
----
-
-## 计划不迁移 / 重新设计的部分
-
-- `pdf_to_images.py`（依赖 Python 的 pdf2image）— TS 生态替代方案待定
-- `manage_test_headers.py`（测试辅助工具）— 不迁移
-- `safety.py`（内容安全检查）— 视需求决定
+```
+LLM_agent/
+├── src/
+│   ├── exceptions.py                    ⏳ 待迁移
+│   ├── safety.py                        🚫 视需求决定
+│   ├── utils.py                         ⏳ 待迁移
+│   ├── concurrent_utils.py              ⏳ 待迁移
+│   ├── cost_calculator.py               ⏳ 待迁移
+│   ├── llm_client.py                    ⏳ 待迁移
+│   ├── model_manager.py                 ⏳ 待迁移
+│   ├── model_caller.py                  ⏳ 待迁移
+│   ├── conversation_manager.py          ⏳ 待迁移
+│   ├── pdf_to_images.py                 🚫 TS 生态替代方案待定
+│   ├── manage_test_headers.py           🚫 不迁移（pytest 辅助工具）
+│   ├── workflow_engine.py               ⏳ 待迁移
+│   ├── workflow_loader.py               ⏳ 待迁移
+│   ├── workflow_parser.py               ⏳ 待迁移
+│   ├── core/
+│   │   ├── logging.py                   ⏳ 待迁移
+│   │   └── workflow_runner.py           ⏳ 待迁移
+│   ├── validators/
+│   │   ├── base.py                      ⏳ 待迁移
+│   │   ├── simple_json_validator.py     ⏳ 待迁移
+│   │   └── pdf_page_validator.py        ⏳ 待迁移（依赖 pdf_to_images）
+│   ├── workflow_actions/
+│   │   ├── base.py                      ⏳ 待迁移
+│   │   ├── llm_actions.py               ⏳ 待迁移
+│   │   ├── concurrent_actions.py        ⏳ 待迁移
+│   │   ├── data_actions.py              ⏳ 待迁移
+│   │   ├── io_actions.py                ⏳ 待迁移
+│   │   ├── utils.py                     ⏳ 待迁移
+│   │   ├── pdf_actions.py               🚫 低优先级（依赖 pdf_to_images）
+│   │   └── ebook_actions.py             🚫 低优先级
+│   └── cli/
+│       └── clean.py                     ⏳ 待迁移
+├── tests/                               ⏳ 随各模块迁移同步补充
+│   ├── unit/                            （对应 src/ 各模块）
+│   └── integration/                     （对应 src/ 各模块）
+├── workflows/                           ⏳ YAML 语法保持兼容，待验证
+│   ├── pdf_ocr_concurrent/
+│   ├── pdf_to_json_20pages/
+│   └── ebook_translation/
+├── apps/
+│   ├── api_server/                      ⏳ 待迁移（Express/Hono 重写）
+│   └── chat_frontend/                   ⏳ 待适配（对接新 TS 后端 API）
+├── docs/                                ⏳ 待重写（内容针对 Python，需改为 TS 版本）
+├── examples/                            ⏳ 待重写（Python 示例替换为 TS 示例）
+├── scripts/                             ⏳ 待评估（逐个确认是否需要重写）
+└── archived/                            🚫 无需迁移
+```
 
 ---
 
