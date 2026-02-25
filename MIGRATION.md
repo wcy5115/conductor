@@ -36,7 +36,7 @@ LLM_agent/
 │   ├── cost_calculator.py               ✅ 已迁移 → src/cost_calculator.ts
 │   ├── llm_client.py                    ✅ 已迁移 → src/llm_client.ts
 │   ├── model_manager.py                 ✅ 已迁移 → src/model_manager.ts
-│   ├── model_caller.py                  ⏳ 待迁移
+│   ├── model_caller.py                  ✅ 已迁移 → src/model_caller.ts
 │   ├── conversation_manager.py          ⏳ 待迁移
 │   ├── pdf_to_images.py                 🚫 TS 生态替代方案待定
 │   ├── manage_test_headers.py           🚫 不迁移（pytest 辅助工具）
@@ -82,6 +82,18 @@ LLM_agent/
 ## 迁移后待重构事项
 
 迁移完成后需要整理的结构问题（不影响当前迁移进度）：
+
+### `src/model_caller.ts` 模型配置外置
+
+当前 `MODEL_MAPPINGS` 硬编码在 `model_caller.ts` 源文件中，换模型或切换 provider 需要改代码。应将其抽取到外部配置文件：
+
+- 目标格式：`models.yaml`（可读性好，支持注释，与 workflow YAML 风格统一）
+- 需要引入 YAML 解析库（推荐 `js-yaml`，也是 workflow 引擎迁移时必然要引入的依赖）
+- `model_caller.ts` 改为启动时读取 `models.yaml` → 构建 `MODEL_MAPPINGS`
+
+**注意**：引入 `js-yaml` 的时机可以等 workflow 引擎迁移（`workflow_loader.py`）时统一安装，两处需求合并处理。
+
+---
 
 ### `src/llm_client.ts` 职责拆分
 
