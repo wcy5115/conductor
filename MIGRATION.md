@@ -34,7 +34,7 @@ LLM_agent/
 │   ├── utils.py                         ✅ 已迁移 → src/utils.ts
 │   ├── concurrent_utils.py              ⏳ 待迁移
 │   ├── cost_calculator.py               ✅ 已迁移 → src/cost_calculator.ts
-│   ├── llm_client.py                    ⏳ 待迁移
+│   ├── llm_client.py                    ✅ 已迁移 → src/llm_client.ts
 │   ├── model_manager.py                 ✅ 已迁移 → src/model_manager.ts
 │   ├── model_caller.py                  ⏳ 待迁移
 │   ├── conversation_manager.py          ⏳ 待迁移
@@ -76,6 +76,21 @@ LLM_agent/
 ├── scripts/                             ⏳ 待评估（逐个确认是否需要重写）
 └── archived/                            🚫 无需迁移
 ```
+
+---
+
+## 迁移后待重构事项
+
+迁移完成后需要整理的结构问题（不影响当前迁移进度）：
+
+### `src/llm_client.ts` 职责拆分
+
+当前 `llm_client.ts` 混入了两个不太属于它的函数：
+
+- **`estimateTokensFromText`** — token 估算逻辑，应移入 `cost_calculator.ts`（该文件本就负责成本/token相关计算）
+- **`processMessagesWithImages`** — 图片预处理逻辑，可移入 `utils.ts`（`imageToBase64`、`getImageMimeType` 已在那里）
+
+拆分后 `llm_client.ts` 只保留：核心 HTTP 调用（`callLlmApi`）、简单包装（`chat`）、熔断检查（`isLlmEnabled`）、`sleep`。
 
 ---
 
