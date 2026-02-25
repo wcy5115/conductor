@@ -32,12 +32,12 @@ LLM_agent/
 │   ├── exceptions.py                    ✅ 已迁移 → src/exceptions.ts
 │   ├── safety.py                        🚫 视需求决定
 │   ├── utils.py                         ✅ 已迁移 → src/utils.ts
-│   ├── concurrent_utils.py              ⏳ 待迁移
+│   ├── concurrent_utils.py              ✅ 已迁移 → src/concurrent_utils.ts
 │   ├── cost_calculator.py               ✅ 已迁移 → src/cost_calculator.ts
 │   ├── llm_client.py                    ✅ 已迁移 → src/llm_client.ts
 │   ├── model_manager.py                 ✅ 已迁移 → src/model_manager.ts
 │   ├── model_caller.py                  ✅ 已迁移 → src/model_caller.ts
-│   ├── conversation_manager.py          ⏳ 待迁移
+│   ├── conversation_manager.py          🚫 不迁移（对话管理由 conductor workflow 框架自身实现）
 │   ├── pdf_to_images.py                 🚫 TS 生态替代方案待定
 │   ├── manage_test_headers.py           🚫 不迁移（pytest 辅助工具）
 │   ├── workflow_engine.py               ⏳ 待迁移
