@@ -33,7 +33,7 @@ LLM_agent/
 │   ├── safety.py                        🚫 视需求决定
 │   ├── utils.py                         ✅ 已迁移 → src/utils.ts
 │   ├── concurrent_utils.py              ⏳ 待迁移
-│   ├── cost_calculator.py               ⏳ 待迁移
+│   ├── cost_calculator.py               ✅ 已迁移 → src/cost_calculator.ts
 │   ├── llm_client.py                    ⏳ 待迁移
 │   ├── model_manager.py                 ⏳ 待迁移
 │   ├── model_caller.py                  ⏳ 待迁移
