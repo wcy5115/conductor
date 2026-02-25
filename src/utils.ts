@@ -128,7 +128,7 @@ export function validateAndCleanJson(
   if (text.includes("```")) {
     const mdMatch = /```(?:json)?\s*\n(.*?)\n```/is.exec(text);
     if (mdMatch) {
-      text = mdMatch[1];
+      text = mdMatch[1]!;
     } else {
       text = text.replace(/```/g, "");
     }
