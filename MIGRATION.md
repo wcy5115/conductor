@@ -29,7 +29,7 @@ conductor 是 [LLM_agent](../LLM_agent) 的 TypeScript 重写版本。
 ```
 LLM_agent/
 ├── src/
-│   ├── exceptions.py                    ⏳ 待迁移
+│   ├── exceptions.py                    ✅ 已迁移 → src/exceptions.ts
 │   ├── safety.py                        🚫 视需求决定
 │   ├── utils.py                         ⏳ 待迁移
 │   ├── concurrent_utils.py              ⏳ 待迁移
