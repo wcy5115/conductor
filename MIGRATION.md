@@ -40,9 +40,9 @@ LLM_agent/
 │   ├── conversation_manager.py          🚫 不迁移（对话管理由 conductor workflow 框架自身实现）
 │   ├── pdf_to_images.py                 🚫 TS 生态替代方案待定
 │   ├── manage_test_headers.py           🚫 不迁移（pytest 辅助工具）
-│   ├── workflow_engine.py               ⏳ 待迁移
+│   ├── workflow_engine.py               ✅ 已迁移 → src/workflow_engine.ts
 │   ├── workflow_loader.py               ⏳ 待迁移
-│   ├── workflow_parser.py               ⏳ 待迁移
+│   ├── workflow_parser.py               ✅ 已迁移 → src/workflow_parser.ts
 │   ├── core/
 │   │   ├── logging.py                   ✅ 已迁移 → src/core/logging.ts
 │   │   └── workflow_runner.py           ⏳ 待迁移
