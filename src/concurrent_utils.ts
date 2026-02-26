@@ -7,7 +7,9 @@ export type ProcessStatus = "success" | "retriable_error" | "fatal_error" | "ski
 
 export interface ItemResult {
   status: ProcessStatus;
+  /** 原始任务的字符串表示（String(item)） */
   item: string;
+  /** 成功时为实际结果；失败时为 `{ error: string }` */
   result: unknown;
 }
 
@@ -16,7 +18,9 @@ export interface ProcessStats {
   success: number;
   failed: number;
   skipped: number;
+  /** 熔断器是否触发过（true 表示有部分任务因连续失败未被执行） */
   circuitBreakerTriggered: boolean;
+  /** 所有已处理任务的结果列表（含成功、失败、跳过） */
   items: ItemResult[];
 }
 
@@ -26,11 +30,15 @@ export interface ProcessStats {
  * ⭐ 断点续存已内置：processFunc 应自行判断是否跳过已处理项目
  *
  * @param items 待处理项目列表
- * @param processFunc 处理函数，返回 [status, result]
+ * @param processFunc 处理函数，返回 `[status, result]`。
+ *   - `"success"` / `"skipped"` — result 为实际结果
+ *   - `"retriable_error"` / `"fatal_error"` — result 为错误描述，存入 `{ error: string }`
+ *   - 抛出异常等同于返回 `"fatal_error"`
  * @param maxConcurrent 最大并发任务数（默认 5）
  * @param taskDispatchDelay 初始派发延迟秒数，undefined 时读取环境变量 TASK_DISPATCH_DELAY（默认 0.5）
  * @param progressDesc 进度描述文字
  * @param circuitBreakerThreshold 连续失败多少次触发熔断（默认 10）
+ * @returns 所有任务的汇总统计，含成功/失败/跳过数量及每个任务的详细结果
  *
  * @example
  * ```typescript
