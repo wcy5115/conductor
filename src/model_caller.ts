@@ -287,7 +287,8 @@ function resolveConfig(entry: ModelConfigEntry, modelAlias: string): SingleModel
       );
     }
 
-    const config = { ...enabledConfigs[0] };
+    // enabledConfigs[0]!: 此处 length 已确认为 1，! 安全；as SingleModelConfig：展开对象导致必填字段变 optional，手动恢复类型
+    const config = { ...enabledConfigs[0]! } as SingleModelConfig;
     validateConfigFields(config, modelAlias, config.provider ?? "unknown");
     return config;
   }
@@ -412,9 +413,9 @@ export function getModelInfo(
       };
     }
 
-    config = { ...enabledConfigs[0] };
+    config = { ...enabledConfigs[0]! } as SingleModelConfig;
   } else {
-    config = { ...entry };
+    config = { ...entry } as SingleModelConfig;
   }
 
   // 隐藏 API 密钥
@@ -470,7 +471,7 @@ export function getModelPricingInfo(modelAlias: string): ModelPricing | null {
       logger.warning(`模型 '${modelAlias}' 有多个启用的配置，使用第一个`);
     }
 
-    config = enabledConfigs[0];
+    config = enabledConfigs[0]!; // length 已确认 ≥ 1，! 安全
   } else {
     config = entry;
   }

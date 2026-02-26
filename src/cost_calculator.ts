@@ -53,7 +53,8 @@ export function calculateCost(
   totalTokens: number,
 ): CostResult {
   // TODO: 待 model_caller.ts 迁移后，替换为 getModelPricingInfo(model)
-  const pricing: PricingInfo | null = null;
+  // 强制为联合类型，防止 TS 将字面量 null 收窄为 never（导致后续代码被标记为不可达）
+  const pricing = null as PricingInfo | null;
 
   if (!pricing) {
     logger.warn(`模型 '${model}' 没有配置价格，返回零成本`);
