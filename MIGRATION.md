@@ -79,6 +79,26 @@ LLM_agent/
 
 ---
 
+## 迁移注意事项
+
+### `workflow_actions/concurrent_actions.py` → 使用函数式 API
+
+Python 版调用 `ConcurrentProcessor` 类（`processor.process_batch(...)`），
+TS 版已精简为单一函数 `concurrentProcess(...)`，迁移时需改写调用方式：
+
+```python
+# Python（旧）
+processor = ConcurrentProcessor(max_concurrent=5)
+stats = processor.process_batch(items, process_func)
+```
+
+```typescript
+// TypeScript（新）
+const stats = await concurrentProcess(items, processFunc, 5);
+```
+
+---
+
 ## 迁移后待重构事项
 
 迁移完成后需要整理的结构问题（不影响当前迁移进度）：
