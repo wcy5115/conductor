@@ -1,8 +1,15 @@
 /**
  * 模型调用映射模块
  * 提供简化的模型调用接口，将模型简称映射到具体的API调用参数
+ *
+ * 模型配置从项目根目录的 models.yaml 动态加载，修改 YAML 后重启即可生效，无需重编译。
+ * api_key 字段支持 ${ENV_VAR} 语法，程序启动时自动替换为对应环境变量的值。
  */
 
+import * as fs from "fs";
+import * as path from "path";
+import * as yaml from "js-yaml";
+import { fileURLToPath } from "url";
 import { chat, LlmResult } from "./llm_client.js";
 
 const logger = {
@@ -40,191 +47,59 @@ export type ModelConfigEntry = SingleModelConfig | SingleModelConfig[];
 export type ModelMappings = Record<string, ModelConfigEntry>;
 
 // ============================================================
-// 模型映射配置
+// 从 models.yaml 加载模型配置
 // ============================================================
 
-export const MODEL_MAPPINGS: ModelMappings = {
-  gpt4: [
-    {
-      enabled: true, // ← 当前启用 OpenAI
-      provider: "openai",
-      api_url: "https://api.openai.com/v1/chat/completions",
-      api_key: process.env["OPENAI_API_KEY"] ?? "",
-      model_name: "gpt-4",
-      temperature: 0.7,
-      max_tokens: 4000,
-      pricing: { input: 30.0, output: 60.0, currency: "CNY" },
-    },
-    {
-      enabled: false, // ← 备用：OpenRouter
-      provider: "openrouter",
-      api_url: "https://openrouter.ai/api/v1/chat/completions",
-      api_key: process.env["OPENROUTER_API_KEY"] ?? "",
-      model_name: "openai/gpt-4",
-      temperature: 0.7,
-      max_tokens: 4000,
-      pricing: { input: 28.0, output: 58.0, currency: "CNY" },
-    },
-  ],
+/**
+ * 解析字符串中的 ${ENV_VAR} 占位符，替换为对应的环境变量值。
+ * 变量未设置时替换为空字符串。
+ */
+function resolveEnvPlaceholders(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replace(/\$\{(\w+)\}/g, (_, name: string) => process.env[name] ?? "");
+  }
+  if (Array.isArray(value)) {
+    return value.map(resolveEnvPlaceholders);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, resolveEnvPlaceholders(v)])
+    );
+  }
+  return value;
+}
 
-  "genmini3": [
-    {
-      enabled: true,
-      provider: "UnifyLLM",
-      api_url: "https://apihk.unifyllm.top/v1/chat/completions",
-      api_key: process.env["UNIFYLLM_API_KEY"] ?? "",
-      model_name: "gemini-3-pro-preview-thinking",
-      temperature: 1,
-      max_tokens: 8000,
-      pricing: { input: 1.2, output: 7.2, currency: "CNY" },
-    },
-    {
-      enabled: false,
-      provider: "openrouter",
-      api_url: "https://openrouter.ai/api/v1/chat/completions",
-      api_key: process.env["OPENROUTER_API_KEY"] ?? "",
-      model_name: "openai/gpt-4",
-      temperature: 0.7,
-      max_tokens: 4000,
-      pricing: { input: 28.0, output: 58.0, currency: "CNY" },
-    },
-  ],
+/** 查找 models.yaml：优先用环境变量 MODELS_YAML_PATH，否则从当前文件向上找到项目根目录 */
+function findModelsYaml(): string {
+  if (process.env["MODELS_YAML_PATH"]) return process.env["MODELS_YAML_PATH"];
 
-  "qwen-vl-max": {
-    provider: "aliyuncs",
-    api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-    api_key: process.env["ALIYUNCS_API_KEY"] ?? "",
-    model_name: "qwen-vl-max",
-    temperature: 0.3,
-    max_tokens: 4000,
-    pricing: { input: 1, output: 4, currency: "CNY" },
-  },
+  // ESM 环境下用 import.meta.url 定位当前文件，再往上找项目根
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  // src/ 的上一级即项目根
+  const projectRoot = path.resolve(currentDir, "..");
+  return path.join(projectRoot, "models.yaml");
+}
 
-  "gemini-flash": {
-    provider: "openrouter",
-    api_url: "https://openrouter.ai/api/v1/chat/completions",
-    api_key: process.env["OPENROUTER_API_KEY"] ?? "",
-    model_name: "google/gemini-2.5-flash",
-    temperature: 0.7,
-    max_tokens: 4000,
-  },
+function loadModelMappings(): ModelMappings {
+  const yamlPath = findModelsYaml();
 
-  "deepseek-V3.2-nonthinking": [
-    {
-      enabled: true, // ← 当前启用：阿里千问 API
-      provider: "aliyuncs",
-      api_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-      api_key: process.env["ALIYUNCS_API_KEY"] ?? "",
-      model_name: "deepseek-v3.2-exp",
-      temperature: 0.3,
-      max_tokens: 8000,
-      extra_params: { enable_thinking: false },
-    },
-    {
-      enabled: false, // ← 备用：OpenRouter
-      provider: "openrouter",
-      api_url: "https://openrouter.ai/api/v1/chat/completions",
-      api_key: process.env["OPENROUTER_API_KEY"] ?? "",
-      model_name: "deepseek/deepseek-v3.2-exp",
-      temperature: 0.7,
-      max_tokens: 8000,
-      extra_params: {},
-    },
-  ],
+  if (!fs.existsSync(yamlPath)) {
+    throw new Error(
+      `找不到模型配置文件: ${yamlPath}\n` +
+      `请在项目根目录创建 models.yaml，或通过环境变量 MODELS_YAML_PATH 指定路径。`
+    );
+  }
 
-  glm: {
-    provider: "openrouter",
-    api_url: "https://openrouter.ai/api/v1/chat/completions",
-    api_key: process.env["OPENROUTER_API_KEY"] ?? "",
-    model_name: "z-ai/glm-4.6",
-    temperature: 0.7,
-    max_tokens: 4000,
-  },
+  const raw = yaml.load(fs.readFileSync(yamlPath, "utf-8"));
+  if (!raw || typeof raw !== "object") {
+    throw new Error(`models.yaml 格式错误：顶层应为键值对象`);
+  }
 
-  "kimi-K2-thinking": {
-    provider: "openrouter",
-    api_url: "https://openrouter.ai/api/v1/chat/completions",
-    api_key: process.env["OPENROUTER_API_KEY"] ?? "",
-    model_name: "moonshotai/kimi-k2-thinking",
-    temperature: 0.7,
-    max_tokens: 4000,
-  },
+  // 替换所有 ${ENV_VAR} 占位符
+  return resolveEnvPlaceholders(raw) as ModelMappings;
+}
 
-  minimax: {
-    provider: "openrouter",
-    api_url: "https://openrouter.ai/api/v1/chat/completions",
-    api_key: process.env["OPENROUTER_API_KEY"] ?? "",
-    model_name: "minimax/minimax-m2",
-    temperature: 0.7,
-    max_tokens: 4000,
-  },
-
-  ernie: {
-    provider: "openrouter",
-    api_url: "https://openrouter.ai/api/v1/chat/completions",
-    api_key: process.env["OPENROUTER_API_KEY"] ?? "",
-    model_name: "baidu/ernie-4.5-300b-a47b",
-    temperature: 0.7,
-    max_tokens: 4000,
-  },
-
-  "qwen-max": {
-    provider: "openrouter",
-    api_url: "https://openrouter.ai/api/v1/chat/completions",
-    api_key: process.env["OPENROUTER_API_KEY"] ?? "",
-    model_name: "qwen/qwen-max",
-    temperature: 0.7,
-    max_tokens: 4000,
-  },
-
-  "gpt5-mini": {
-    provider: "openrouter",
-    api_url: "https://openrouter.ai/api/v1/chat/completions",
-    api_key: process.env["OPENROUTER_API_KEY"] ?? "",
-    model_name: "openai/gpt-5-mini",
-    temperature: 0.7,
-    max_tokens: 4000,
-  },
-
-  kimi: {
-    provider: "moonshot",
-    api_url: "https://api.moonshot.cn/v1/chat/completions",
-    api_key: process.env["MOONSHOT_API_KEY"] ?? "",
-    model_name: "moonshot-v1-8k",
-    temperature: 0.7,
-    max_tokens: 2000,
-  },
-
-  "doubao-vision": {
-    provider: "bytedance",
-    api_url: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
-    api_key: process.env["BYTEDANCE_API_KEY"] ?? "",
-    model_name: "doubao-seed-1-6-vision-250815",
-    temperature: 0.1,
-    max_tokens: 8000,
-    extra_params: { thinking: { type: "disabled" } },
-    pricing: { input: 0.8, output: 8.0, currency: "CNY" },
-  },
-
-  // ==================== 别名/快捷方式 ====================
-  fast: {
-    provider: "openai",
-    api_url: "https://api.openai.com/v1/chat/completions",
-    api_key: process.env["OPENAI_API_KEY"] ?? "",
-    model_name: "gpt-3.5-turbo",
-    temperature: 0.7,
-    max_tokens: 2000,
-  },
-
-  smart: {
-    provider: "openai",
-    api_url: "https://api.openai.com/v1/chat/completions",
-    api_key: process.env["OPENAI_API_KEY"] ?? "",
-    model_name: "gpt-4o",
-    temperature: 0.7,
-    max_tokens: 4000,
-  },
-};
+export let MODEL_MAPPINGS: ModelMappings = loadModelMappings();
 
 // ============================================================
 // 内部辅助
@@ -477,4 +352,14 @@ export function getModelPricingInfo(modelAlias: string): ModelPricing | null {
   }
 
   return config.pricing ?? null;
+}
+
+/**
+ * 重新从 models.yaml 加载模型配置（热重载，无需重启进程）
+ *
+ * 修改 models.yaml 后调用此函数即可生效。
+ */
+export function reloadModels(): void {
+  MODEL_MAPPINGS = loadModelMappings();
+  logger.info(`模型配置已重新加载，共 ${Object.keys(MODEL_MAPPINGS).length} 个模型`);
 }

@@ -1,0 +1,198 @@
+# 模型配置文件
+#
+# 格式说明：
+#   - api_key 支持 ${ENV_VAR} 语法，程序启动时自动读取对应环境变量
+#   - 单配置：直接写字典
+#   - 多配置（多提供商备选）：写数组，用 enabled: true/false 切换启用哪一个
+#
+# 价格单位：人民币 / 百万 tokens
+
+# ==================== GPT-4 ====================
+gpt4:
+  - enabled: true          # 当前启用：OpenAI 官方
+    provider: openai
+    api_url: https://api.openai.com/v1/chat/completions
+    api_key: ${OPENAI_API_KEY}
+    model_name: gpt-4
+    temperature: 0.7
+    max_tokens: 4000
+    pricing:
+      input: 30.0
+      output: 60.0
+      currency: CNY
+
+  - enabled: false         # 备用：OpenRouter
+    provider: openrouter
+    api_url: https://openrouter.ai/api/v1/chat/completions
+    api_key: ${OPENROUTER_API_KEY}
+    model_name: openai/gpt-4
+    temperature: 0.7
+    max_tokens: 4000
+    pricing:
+      input: 28.0
+      output: 58.0
+      currency: CNY
+
+# ==================== Gemini 3 ====================
+genmini3:
+  - enabled: true
+    provider: UnifyLLM
+    api_url: https://apihk.unifyllm.top/v1/chat/completions
+    api_key: ${UNIFYLLM_API_KEY}
+    model_name: gemini-3-pro-preview-thinking
+    temperature: 1
+    max_tokens: 8000
+    pricing:
+      input: 1.2
+      output: 7.2
+      currency: CNY
+
+  - enabled: false
+    provider: openrouter
+    api_url: https://openrouter.ai/api/v1/chat/completions
+    api_key: ${OPENROUTER_API_KEY}
+    model_name: openai/gpt-4
+    temperature: 0.7
+    max_tokens: 4000
+    pricing:
+      input: 28.0
+      output: 58.0
+      currency: CNY
+
+# ==================== Qwen VL ====================
+qwen-vl-max:
+  provider: aliyuncs
+  api_url: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  api_key: ${ALIYUNCS_API_KEY}
+  model_name: qwen-vl-max
+  temperature: 0.3
+  max_tokens: 4000
+  pricing:
+    input: 1.0
+    output: 4.0
+    currency: CNY
+
+# ==================== Gemini Flash ====================
+gemini-flash:
+  provider: openrouter
+  api_url: https://openrouter.ai/api/v1/chat/completions
+  api_key: ${OPENROUTER_API_KEY}
+  model_name: google/gemini-2.5-flash
+  temperature: 0.7
+  max_tokens: 4000
+
+# ==================== DeepSeek V3.2 ====================
+deepseek-V3.2-nonthinking:
+  - enabled: true          # 当前启用：阿里千问 API
+    provider: aliyuncs
+    api_url: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+    api_key: ${ALIYUNCS_API_KEY}
+    model_name: deepseek-v3.2-exp
+    temperature: 0.3
+    max_tokens: 8000
+    extra_params:
+      enable_thinking: false
+
+  - enabled: false         # 备用：OpenRouter
+    provider: openrouter
+    api_url: https://openrouter.ai/api/v1/chat/completions
+    api_key: ${OPENROUTER_API_KEY}
+    model_name: deepseek/deepseek-v3.2-exp
+    temperature: 0.7
+    max_tokens: 8000
+
+# ==================== GLM ====================
+glm:
+  provider: openrouter
+  api_url: https://openrouter.ai/api/v1/chat/completions
+  api_key: ${OPENROUTER_API_KEY}
+  model_name: z-ai/glm-4.6
+  temperature: 0.7
+  max_tokens: 4000
+
+# ==================== Kimi K2 Thinking ====================
+kimi-K2-thinking:
+  provider: openrouter
+  api_url: https://openrouter.ai/api/v1/chat/completions
+  api_key: ${OPENROUTER_API_KEY}
+  model_name: moonshotai/kimi-k2-thinking
+  temperature: 0.7
+  max_tokens: 4000
+
+# ==================== MiniMax ====================
+minimax:
+  provider: openrouter
+  api_url: https://openrouter.ai/api/v1/chat/completions
+  api_key: ${OPENROUTER_API_KEY}
+  model_name: minimax/minimax-m2
+  temperature: 0.7
+  max_tokens: 4000
+
+# ==================== ERNIE ====================
+ernie:
+  provider: openrouter
+  api_url: https://openrouter.ai/api/v1/chat/completions
+  api_key: ${OPENROUTER_API_KEY}
+  model_name: baidu/ernie-4.5-300b-a47b
+  temperature: 0.7
+  max_tokens: 4000
+
+# ==================== Qwen Max ====================
+qwen-max:
+  provider: openrouter
+  api_url: https://openrouter.ai/api/v1/chat/completions
+  api_key: ${OPENROUTER_API_KEY}
+  model_name: qwen/qwen-max
+  temperature: 0.7
+  max_tokens: 4000
+
+# ==================== GPT-5 Mini ====================
+gpt5-mini:
+  provider: openrouter
+  api_url: https://openrouter.ai/api/v1/chat/completions
+  api_key: ${OPENROUTER_API_KEY}
+  model_name: openai/gpt-5-mini
+  temperature: 0.7
+  max_tokens: 4000
+
+# ==================== Kimi ====================
+kimi:
+  provider: moonshot
+  api_url: https://api.moonshot.cn/v1/chat/completions
+  api_key: ${MOONSHOT_API_KEY}
+  model_name: moonshot-v1-8k
+  temperature: 0.7
+  max_tokens: 2000
+
+# ==================== Doubao Vision ====================
+doubao-vision:
+  provider: bytedance
+  api_url: https://ark.cn-beijing.volces.com/api/v3/chat/completions
+  api_key: ${BYTEDANCE_API_KEY}
+  model_name: doubao-seed-1-6-vision-250815
+  temperature: 0.1
+  max_tokens: 8000
+  extra_params:
+    thinking:
+      type: disabled
+  pricing:
+    input: 0.8
+    output: 8.0
+    currency: CNY
+
+# ==================== 别名 / 快捷方式 ====================
+fast:
+  provider: openai
+  api_url: https://api.openai.com/v1/chat/completions
+  api_key: ${OPENAI_API_KEY}
+  model_name: gpt-3.5-turbo
+  temperature: 0.7
+  max_tokens: 2000
+
+smart:
+  provider: openai
+  api_url: https://api.openai.com/v1/chat/completions
+  api_key: ${OPENAI_API_KEY}
+  model_name: gpt-4o
+  temperature: 0.7
+  max_tokens: 4000
