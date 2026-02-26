@@ -103,15 +103,13 @@ const stats = await concurrentProcess(items, processFunc, 5);
 
 迁移完成后需要整理的结构问题（不影响当前迁移进度）：
 
-### `src/model_caller.ts` 模型配置外置
+### `src/model_caller.ts` 模型配置外置 ✅
 
-当前 `MODEL_MAPPINGS` 硬编码在 `model_caller.ts` 源文件中，换模型或切换 provider 需要改代码。应将其抽取到外部配置文件：
-
-- 目标格式：`models.yaml`（可读性好，支持注释，与 workflow YAML 风格统一）
-- 需要引入 YAML 解析库（推荐 `js-yaml`，也是 workflow 引擎迁移时必然要引入的依赖）
-- `model_caller.ts` 改为启动时读取 `models.yaml` → 构建 `MODEL_MAPPINGS`
-
-**注意**：引入 `js-yaml` 的时机可以等 workflow 引擎迁移（`workflow_loader.py`）时统一安装，两处需求合并处理。
+`MODEL_MAPPINGS` 已抽取到项目根目录的 `models.yaml`：
+- `api_key` 字段使用 `${ENV_VAR}` 占位符，启动时自动读取环境变量
+- 修改模型配置或切换提供商只需编辑 `models.yaml` 并重启，无需重编译
+- `reloadModels()` 支持运行时热重载
+- `js-yaml` 已安装，`workflow_loader.ts` 迁移时可直接使用
 
 ---
 
