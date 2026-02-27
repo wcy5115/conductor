@@ -213,6 +213,47 @@ export function formatErrorContext(
  * @param keyPath      点分隔路径，如 "a.b.c"
  * @param defaultValue 路径不存在时的默认值，默认 undefined
  */
+/**
+ * 格式化路径模板，将模板中的占位符替换为实际值。
+ *
+ * 支持两种占位符格式：
+ *   {key}      — 直接替换为变量值的字符串形式，例如 {name} → "test"
+ *   {key:04d}  — 零补全数字格式，例如 {index:04d}（index=3）→ "0003"
+ *
+ * 使用示例：
+ *   formatPathTemplate("output/{name}.json", { name: "test" })
+ *   → "output/test.json"
+ *
+ *   formatPathTemplate("page_{index:04d}.json", { index: 3 })
+ *   → "page_0003.json"
+ *
+ * @param template 包含占位符的路径字符串
+ * @param vars     替换变量的字典，键名对应占位符中的变量名
+ * @throws Error   模板中引用了 vars 中不存在的变量时抛出
+ */
+export function formatPathTemplate(
+  template: string,
+  vars: Record<string, unknown>
+): string {
+  // 正则表达式拆解：
+  //   \{(\w+)        — 匹配 { 开头，捕获变量名（字母/数字/下划线）
+  //   (?::0(\d+)d)?  — 可选：匹配 :04d 这种格式，捕获宽度数字（如 "4"）
+  //   \}             — 匹配 } 结尾
+  // 回调函数参数：_ 是完整匹配，key 是变量名，width 是宽度数字（可能是 undefined）
+  return template.replace(/\{(\w+)(?::0(\d+)d)?\}/g, (_, key: string, width?: string) => {
+    // 变量名不在字典里，直接报错，避免生成错误路径
+    if (!(key in vars)) throw new Error(`路径模板缺少变量: ${key}`);
+    const val = vars[key];
+    // 有宽度且值是数字 → 用 padStart 在左侧补零到指定长度
+    // 例如 val=3, width="4" → String(3).padStart(4, "0") → "0003"
+    if (width !== undefined && typeof val === "number") {
+      return String(val).padStart(parseInt(width), "0");
+    }
+    // 无宽度要求 → 直接转字符串
+    return String(val);
+  });
+}
+
 export function deepGet(
   data: Record<string, unknown>,
   keyPath: string,

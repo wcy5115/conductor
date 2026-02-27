@@ -53,7 +53,7 @@ LLM_agent/
 │   ├── workflow_actions/
 │   │   ├── base.py                      ✅ 已迁移 → src/workflow_actions/base.ts
 │   │   ├── llm_actions.py               ✅ 已迁移 → src/workflow_actions/llm_actions.ts
-│   │   ├── concurrent_actions.py        ⏳ 待迁移
+│   │   ├── concurrent_actions.py        ✅ 已迁移 → src/workflow_actions/concurrent_actions.ts
 │   │   ├── data_actions.py              ✅ 已迁移 → src/workflow_actions/data_actions.ts
 │   │   ├── io_actions.py                ✅ 已迁移 → src/workflow_actions/io_actions.ts
 │   │   ├── utils.py                     ✅ 已迁移 → src/workflow_actions/utils.ts
@@ -103,6 +103,22 @@ stats = processor.process_batch(items, process_func)
 // TypeScript（新）
 const stats = await concurrentProcess(items, processFunc, 5);
 ```
+
+---
+
+### `workflow_loader.py` → 改进 YAML 字段缺失时的报错
+
+Python 版 loader 对必填字段缺失的处理不够清晰，例如 `data_process` 类型的步骤如果漏写 `processor` 字段：
+
+```python
+# 当前行为：config.get("processor") 返回 None，然后报"未注册"
+处理器 'None' 未注册    # ← 误导，实际是字段没写
+
+# 迁移时改为：先检查字段是否存在，再检查是否注册
+步骤 'xxx' 缺少必填字段 'processor'   # ← 真正的原因
+```
+
+迁移时对所有 action 类型的必填字段都加上这种前置检查。
 
 ---
 
