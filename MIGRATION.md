@@ -35,7 +35,7 @@ LLM_agent/
 │   ├── concurrent_utils.py              ✅ 已迁移 → src/concurrent_utils.ts
 │   ├── cost_calculator.py               ✅ 已迁移 → src/cost_calculator.ts
 │   ├── llm_client.py                    ✅ 已迁移 → src/llm_client.ts
-│   ├── model_manager.py                 ✅ 已迁移 → src/model_manager.ts
+│   ├── model_manager.py                 🔀 功能已被 model_caller.ts 完全覆盖；src/model_manager.ts 已删除（死代码）
 │   ├── model_caller.py                  ✅ 已迁移 → src/model_caller.ts
 │   ├── conversation_manager.py          🚫 不迁移（对话管理由 conductor workflow 框架自身实现）
 │   ├── pdf_to_images.py                 🚫 TS 生态替代方案待定
@@ -47,16 +47,16 @@ LLM_agent/
 │   │   ├── logging.py                   ✅ 已迁移 → src/core/logging.ts
 │   │   └── workflow_runner.py           ⏳ 待迁移
 │   ├── validators/
-│   │   ├── base.py                      ⏳ 待迁移
-│   │   ├── simple_json_validator.py     ⏳ 待迁移
+│   │   ├── base.py                      ✅ 已迁移 → src/validators/base.ts
+│   │   ├── simple_json_validator.py     ✅ 已迁移 → src/validators/simple_json_validator.ts
 │   │   └── pdf_page_validator.py        ⏳ 待迁移（依赖 pdf_to_images）
 │   ├── workflow_actions/
-│   │   ├── base.py                      ⏳ 待迁移
+│   │   ├── base.py                      ✅ 已迁移 → src/workflow_actions/base.ts
 │   │   ├── llm_actions.py               ⏳ 待迁移
 │   │   ├── concurrent_actions.py        ⏳ 待迁移
 │   │   ├── data_actions.py              ⏳ 待迁移
 │   │   ├── io_actions.py                ⏳ 待迁移
-│   │   ├── utils.py                     ⏳ 待迁移
+│   │   ├── utils.py                     ✅ 已迁移 → src/workflow_actions/utils.ts
 │   │   ├── pdf_actions.py               🚫 低优先级（依赖 pdf_to_images）
 │   │   └── ebook_actions.py             🚫 低优先级
 │   └── cli/
@@ -80,6 +80,13 @@ LLM_agent/
 ---
 
 ## 迁移注意事项
+
+### `workflow_actions/utils.py` → 工厂函数不迁移
+
+`create_simple_action` / `create_llm_action` 两个工厂函数不迁移。
+理由：仅是构造函数的薄包装，TS 有类型提示后直接 `new` 更清晰，无保留价值。
+
+---
 
 ### `workflow_actions/concurrent_actions.py` → 使用函数式 API
 
