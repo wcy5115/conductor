@@ -52,7 +52,7 @@ LLM_agent/
 │   │   └── pdf_page_validator.py        ⏳ 待迁移（依赖 pdf_to_images）
 │   ├── workflow_actions/
 │   │   ├── base.py                      ✅ 已迁移 → src/workflow_actions/base.ts
-│   │   ├── llm_actions.py               ⏳ 待迁移
+│   │   ├── llm_actions.py               ✅ 已迁移 → src/workflow_actions/llm_actions.ts
 │   │   ├── concurrent_actions.py        ⏳ 待迁移
 │   │   ├── data_actions.py              ⏳ 待迁移
 │   │   ├── io_actions.py                ⏳ 待迁移
