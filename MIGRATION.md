@@ -54,8 +54,8 @@ LLM_agent/
 │   │   ├── base.py                      ✅ 已迁移 → src/workflow_actions/base.ts
 │   │   ├── llm_actions.py               ✅ 已迁移 → src/workflow_actions/llm_actions.ts
 │   │   ├── concurrent_actions.py        ⏳ 待迁移
-│   │   ├── data_actions.py              ⏳ 待迁移
-│   │   ├── io_actions.py                ⏳ 待迁移
+│   │   ├── data_actions.py              ✅ 已迁移 → src/workflow_actions/data_actions.ts
+│   │   ├── io_actions.py                ✅ 已迁移 → src/workflow_actions/io_actions.ts
 │   │   ├── utils.py                     ✅ 已迁移 → src/workflow_actions/utils.ts
 │   │   ├── pdf_actions.py               🚫 低优先级（依赖 pdf_to_images）
 │   │   └── ebook_actions.py             🚫 低优先级
