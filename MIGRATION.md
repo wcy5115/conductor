@@ -41,7 +41,7 @@ LLM_agent/
 │   ├── pdf_to_images.py                 🚫 TS 生态替代方案待定
 │   ├── manage_test_headers.py           🚫 不迁移（pytest 辅助工具）
 │   ├── workflow_engine.py               ✅ 已迁移 → src/workflow_engine.ts
-│   ├── workflow_loader.py               ⏳ 待迁移
+│   ├── workflow_loader.py               ✅ 已迁移 → src/workflow_loader.ts
 │   ├── workflow_parser.py               ✅ 已迁移 → src/workflow_parser.ts
 │   ├── core/
 │   │   ├── logging.py                   ✅ 已迁移 → src/core/logging.ts
@@ -144,6 +144,22 @@ Python 版 loader 对必填字段缺失的处理不够清晰，例如 `data_proc
 - **`processMessagesWithImages`** — 图片预处理逻辑，可移入 `utils.ts`（`imageToBase64`、`getImageMimeType` 已在那里）
 
 拆分后 `llm_client.ts` 只保留：核心 HTTP 调用（`callLlmApi`）、简单包装（`chat`）、熔断检查（`isLlmEnabled`）、`sleep`。
+
+---
+
+### `ConditionalLLMAction` 继承 `LLMCallAction`
+
+当前 `ConditionalLLMAction` 与 `LLMCallAction` 是平级关系，各自独立实现模型调用逻辑。
+`ConditionalLLMAction` 缺少 JSON 验证、重试、成本统计等能力，与框架整体设计不一致。
+
+重构方案：让 `ConditionalLLMAction` 继承 `LLMCallAction`，复用验证/重试/成本统计，
+仅将固定的 `nextStep` 替换为 `conditionFunc(response)` 动态决定。
+
+```
+BaseAction                → 计时、日志、错误处理
+  └─ LLMCallAction        → 模型调用、验证、重试、成本统计
+       └─ ConditionalLLMAction  → 在此基础上加动态路由
+```
 
 ---
 
