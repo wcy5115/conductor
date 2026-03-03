@@ -45,7 +45,7 @@ LLM_agent/
 │   ├── workflow_parser.py               ✅ 已迁移 → src/workflow_parser.ts
 │   ├── core/
 │   │   ├── logging.py                   ✅ 已迁移 → src/core/logging.ts
-│   │   └── workflow_runner.py           ⏳ 待迁移
+│   │   └── workflow_runner.py           ✅ 已迁移 → src/core/workflow_runner.ts
 │   ├── validators/
 │   │   ├── base.py                      ✅ 已迁移 → src/validators/base.ts
 │   │   ├── simple_json_validator.py     ✅ 已迁移 → src/validators/simple_json_validator.ts
@@ -60,7 +60,7 @@ LLM_agent/
 │   │   ├── pdf_actions.py               🚫 低优先级（依赖 pdf_to_images）
 │   │   └── ebook_actions.py             🚫 低优先级
 │   └── cli/
-│       └── clean.py                     ⏳ 待迁移
+│       └── clean.py                     ✅ 已迁移 → src/cli/clean.ts
 ├── tests/                               ⏳ 随各模块迁移同步补充
 │   ├── unit/                            （对应 src/ 各模块）
 │   └── integration/                     （对应 src/ 各模块）
