@@ -49,7 +49,7 @@ LLM_agent/
 │   ├── validators/
 │   │   ├── base.py                      ✅ 已迁移 → src/validators/base.ts
 │   │   ├── simple_json_validator.py     ✅ 已迁移 → src/validators/simple_json_validator.ts
-│   │   └── pdf_page_validator.py        ⏳ 待迁移（依赖 pdf_to_images）
+│   │   └── pdf_page_validator.py        ✅ 已迁移 → src/validators/pdf_page_validator.ts
 │   ├── workflow_actions/
 │   │   ├── base.py                      ✅ 已迁移 → src/workflow_actions/base.ts
 │   │   ├── llm_actions.py               ✅ 已迁移 → src/workflow_actions/llm_actions.ts
@@ -136,12 +136,12 @@ Python 版 loader 对必填字段缺失的处理不够清晰，例如 `data_proc
 
 ---
 
-### `src/llm_client.ts` 职责拆分
+### `src/llm_client.ts` 职责拆分 ✅
 
-当前 `llm_client.ts` 混入了两个不太属于它的函数：
+已完成拆分：
 
-- **`estimateTokensFromText`** — token 估算逻辑，应移入 `cost_calculator.ts`（该文件本就负责成本/token相关计算）
-- **`processMessagesWithImages`** — 图片预处理逻辑，可移入 `utils.ts`（`imageToBase64`、`getImageMimeType` 已在那里）
+- **`estimateTokensFromText`** → 移入 `cost_calculator.ts`（token/成本计算集中管理）
+- **`processMessagesWithImages`** → 移入 `utils.ts`（与 `imageToBase64`、`getImageMimeType` 放在一起）
 
 拆分后 `llm_client.ts` 只保留：核心 HTTP 调用（`callLlmApi`）、简单包装（`chat`）、熔断检查（`isLlmEnabled`）、`sleep`。
 

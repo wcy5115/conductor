@@ -244,6 +244,60 @@ export function aggregateCosts(costList: CostResult[]): CostResult {
 }
 
 // ============================================================
+// Token 估算
+// ============================================================
+
+/**
+ * 从文本内容估算 token 数量
+ *
+ * 当 API 响应中缺少 usage 字段时（某些第三方 API 不返回），
+ * 使用此函数根据字符数粗略估算 token 数，保证成本计算不会缺失。
+ *
+ * 估算规则（经验值，非精确）：
+ *   - 中文字符：1 个汉字 ≈ 0.3 tokens（因为一个汉字通常编码为 1-2 个 token，取平均）
+ *   - 英文字母：3 个字母 ≈ 0.3 tokens（英文单词平均 4-5 个字母，约 1 token）
+ *
+ * 示例：
+ *   "你好世界" → 4 个中文 × 0.3 = 1.2 → 取整 = 1
+ *   "Hello World" → 10 个英文字母 ÷ 3 × 0.3 = 1.0 → 取整 = 1
+ *   "你好Hello" → 中文 2×0.3=0.6 + 英文 5÷3×0.3=0.5 = 1.1 → 取整 = 1
+ *
+ * @param text 要估算的文本内容
+ * @returns 估算的 token 数量（向下取整）
+ */
+export function estimateTokensFromText(text: string): number {
+  // 空文本直接返回 0，避免后续正则匹配浪费
+  if (!text) return 0;
+
+  // 统计中文字符数量
+  // 正则 [\u4e00-\u9fff] 匹配 Unicode 中日韩统一表意文字区间：
+  //   \u4e00 = "一"（区间起始）
+  //   \u9fff = "鿿"（区间结束）
+  // 覆盖了绝大多数常用汉字（约 20,000 个）
+  // match() 返回匹配数组或 null，?? [] 确保 null 时返回空数组
+  const chineseCount = (text.match(/[\u4e00-\u9fff]/g) ?? []).length;
+
+  // 统计英文字母数量（仅字母，不含数字和标点）
+  const englishCount = (text.match(/[a-zA-Z]/g) ?? []).length;
+
+  // 按经验公式计算 token 数
+  const chineseTokens = chineseCount * 0.3;
+  // 英文：先除以 3（每 3 个字母 ≈ 1 个英文"单位"），再乘 0.3
+  const englishTokens = (englishCount / 3.0) * 0.3;
+
+  // Math.floor 向下取整，宁可少算也不高估成本
+  const total = Math.floor(chineseTokens + englishTokens);
+
+  logger.debug(
+    `Token估算: 中文${chineseCount}字×0.3=${chineseTokens.toFixed(1)}, ` +
+      `英文${englishCount}字母÷3×0.3=${englishTokens.toFixed(1)}, ` +
+      `总计≈${total}`
+  );
+
+  return total;
+}
+
+// ============================================================
 // 已废弃的兼容函数
 // ============================================================
 

@@ -3,21 +3,27 @@
  *
  * 本模块是整个项目与大语言模型（LLM）交互的唯一出口，职责包括：
  *   1. 将用户消息发送给 OpenAI 兼容的 API（如 OpenAI、Azure、OpenRouter 等）
- *   2. 自动将消息中的本地图片路径转换为 Base64 编码（多模态支持）
- *   3. 处理 API 响应：提取生成文本、token 用量，判断成功/可重试/致命错误
- *   4. 内置自动重试机制：对速率限制(429)、服务器错误(5xx)、网络超时等自动重试
- *   5. 当 API 未返回 token 用量时，通过中英文字符数估算 token 数
+ *   2. 处理 API 响应：提取生成文本、token 用量，判断成功/可重试/致命错误
+ *   3. 内置自动重试机制：对速率限制(429)、服务器错误(5xx)、网络超时等自动重试
+ *
+ * 已拆分到其他模块的功能：
+ *   - 图片预处理（processMessagesWithImages） → utils.ts
+ *   - Token 估算（estimateTokensFromText）    → cost_calculator.ts
  *
  * 对外暴露两个主要函数：
  *   - callLlmApi()  —— 底层调用，接受完整的消息列表，返回 [status, result] 元组
  *   - chat()        —— 简化接口，传入单条 prompt 字符串即可，自动包装为消息列表
  */
 
-// fs 是 Node.js 内置的文件系统模块，这里用 fs.existsSync() 检查图片文件是否存在
-import * as fs from "fs";
-// imageToBase64: 将图片文件读取并转为 Base64 字符串（用于 API 的多模态输入）
-// getImageMimeType: 根据文件扩展名返回 MIME 类型，如 "image/jpeg"、"image/png"
-import { imageToBase64, getImageMimeType } from "./utils.js";
+// processMessagesWithImages: 预处理消息列表，将本地图片路径自动转换为 Base64 Data URL
+// 原本位于 llm_client.ts 内部，因为与图片工具函数（imageToBase64、getImageMimeType）关系更紧密，
+// 已移至 utils.ts，让 llm_client.ts 只专注于 HTTP 调用逻辑
+import { processMessagesWithImages } from "./utils.js";
+
+// estimateTokensFromText: 根据中英文字符数估算 token 数量
+// 原本位于 llm_client.ts 内部，因为属于 token/成本计算逻辑，
+// 已移至 cost_calculator.ts，让成本相关功能集中管理
+import { estimateTokensFromText } from "./cost_calculator.js";
 
 // ============================================================
 // 简易日志器
@@ -145,149 +151,6 @@ export interface LlmCallOptions {
   retry_delay?: number;
   extra_headers?: Record<string, string>;
   extra_params?: Record<string, unknown>;
-}
-
-// ============================================================
-// 内部函数
-// ============================================================
-
-/**
- * 预处理消息列表，自动将本地图片路径转换为 Base64 编码
- *
- * 工作流 YAML 中用户可以这样引用本地图片：
- *   { type: "image", path: "./screenshots/page1.jpg" }
- *
- * 但 OpenAI 兼容 API 要求图片以 Base64 Data URL 传递，格式为：
- *   { type: "image_url", image_url: { url: "data:image/jpeg;base64,/9j/4AAQ..." } }
- *
- * 本函数遍历所有消息，找到 type="image" 的内容块，读取文件并转换格式。
- * 纯文本消息（content 是 string）不做任何处理，原样保留。
- *
- * @param messages 原始消息列表
- * @returns 处理后的消息列表（新数组，不修改原始数据）
- */
-function processMessagesWithImages(messages: Message[]): Message[] {
-  // 创建新数组存放处理后的消息，避免修改原始输入（不可变数据原则）
-  const processedMessages: Message[] = [];
-
-  for (const msg of messages) {
-    // 浅拷贝消息对象，后续可能替换 content 字段
-    // { ...msg } 是展开运算符，创建一个新对象，复制 msg 的所有属性
-    const processedMsg = { ...msg };
-
-    // 只有 content 为数组时才需要处理（数组 = 多模态消息，可能包含图片）
-    // 纯文本消息（string）不可能包含图片路径，直接跳过
-    if (Array.isArray(msg.content)) {
-      const processedContent: MessageContent[] = [];
-
-      for (const item of msg.content) {
-        // 防御性检查：确保元素是对象且非 null
-        if (typeof item === "object" && item !== null) {
-          // 检测图片路径标记：type 为 "image" 且携带 path 字段
-          // 这是本项目自定义的格式，不是 OpenAI API 标准
-          if (item.type === "image" && "path" in item) {
-            const imagePath = item.path as string;
-
-            // 第一步：检查图片文件是否存在
-            if (!fs.existsSync(imagePath)) {
-              logger.warning(`图片文件不存在，跳过: ${imagePath}`);
-              // continue 跳过当前图片，不中断其他内容的处理
-              continue;
-            }
-
-            // 第二步：读取文件并转换为 Base64 Data URL
-            try {
-              // imageToBase64() 读取二进制文件内容，返回 Base64 编码字符串
-              const base64Data = imageToBase64(imagePath);
-              // getImageMimeType() 根据扩展名返回 MIME 类型
-              // 例如：.jpg → "image/jpeg"，.png → "image/png"
-              const mimeType = getImageMimeType(imagePath);
-
-              // 构建 OpenAI 兼容的图片内容块
-              // Data URL 格式：data:<MIME类型>;base64,<编码数据>
-              // detail: "high" 表示使用高分辨率模式解析图片（消耗更多 token 但更清晰）
-              const processedItem: MessageContent = {
-                type: "image_url",
-                image_url: {
-                  url: `data:${mimeType};base64,${base64Data}`,
-                  detail: "high",
-                },
-              };
-              processedContent.push(processedItem);
-              logger.debug(`图片已转换: ${imagePath}`);
-            } catch (e) {
-              logger.error(`图片转换失败: ${imagePath}, 错误: ${e}`);
-              // 转换失败时跳过该图片，不影响其余内容
-              continue;
-            }
-          } else {
-            // 非图片类型的内容块（如文本块），原样保留
-            processedContent.push(item as MessageContent);
-          }
-        } else {
-          // 非对象类型的元素（理论上不应出现），原样保留以保证健壮性
-          processedContent.push(item as MessageContent);
-        }
-      }
-
-      // 用处理后的内容块数组替换原始 content
-      processedMsg.content = processedContent;
-    }
-
-    processedMessages.push(processedMsg);
-  }
-
-  return processedMessages;
-}
-
-/**
- * 从文本内容估算 token 数量
- *
- * 当 API 响应中缺少 usage 字段时（某些第三方 API 不返回），
- * 使用此函数根据字符数粗略估算 token 数，保证成本计算不会缺失。
- *
- * 估算规则（经验值，非精确）：
- *   - 中文字符：1 个汉字 ≈ 0.3 tokens（因为一个汉字通常编码为 1-2 个 token，取平均）
- *   - 英文字母：3 个字母 ≈ 0.3 tokens（英文单词平均 4-5 个字母，约 1 token）
- *
- * 示例：
- *   "你好世界" → 4 个中文 × 0.3 = 1.2 → 取整 = 1
- *   "Hello World" → 10 个英文字母 ÷ 3 × 0.3 = 1.0 → 取整 = 1
- *   "你好Hello" → 中文 2×0.3=0.6 + 英文 5÷3×0.3=0.5 = 1.1 → 取整 = 1
- *
- * @param text 要估算的文本内容
- * @returns 估算的 token 数量（向下取整）
- */
-function estimateTokensFromText(text: string): number {
-  // 空文本直接返回 0，避免后续正则匹配浪费
-  if (!text) return 0;
-
-  // 统计中文字符数量
-  // 正则 [\u4e00-\u9fff] 匹配 Unicode 中日韩统一表意文字区间：
-  //   \u4e00 = "一"（区间起始）
-  //   \u9fff = "鿿"（区间结束）
-  // 覆盖了绝大多数常用汉字（约 20,000 个）
-  // match() 返回匹配数组或 null，?? [] 确保 null 时返回空数组
-  const chineseCount = (text.match(/[\u4e00-\u9fff]/g) ?? []).length;
-
-  // 统计英文字母数量（仅字母，不含数字和标点）
-  const englishCount = (text.match(/[a-zA-Z]/g) ?? []).length;
-
-  // 按经验公式计算 token 数
-  const chineseTokens = chineseCount * 0.3;
-  // 英文：先除以 3（每 3 个字母 ≈ 1 个英文"单位"），再乘 0.3
-  const englishTokens = (englishCount / 3.0) * 0.3;
-
-  // Math.floor 向下取整，宁可少算也不高估成本
-  const total = Math.floor(chineseTokens + englishTokens);
-
-  logger.debug(
-    `Token估算: 中文${chineseCount}字×0.3=${chineseTokens.toFixed(1)}, ` +
-      `英文${englishCount}字母÷3×0.3=${englishTokens.toFixed(1)}, ` +
-      `总计≈${total}`
-  );
-
-  return total;
 }
 
 /**
