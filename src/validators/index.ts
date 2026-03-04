@@ -17,8 +17,10 @@
 // BaseValidator 是所有验证器的抽象基类，定义了 validate() 和 name 两个抽象成员
 // 导入后在本文件底部重新导出，方便外部模块统一从 validators/index.ts 导入
 import { BaseValidator } from "./base.js";
-// SimpleJSONValidator 是目前唯一已迁移的验证器，用于校验 LLM 返回的 JSON 格式是否合法
+// SimpleJSONValidator 只校验基础字段存在性（"页码"和"内容"），不验证内容结构
 import { SimpleJSONValidator } from "./simple_json_validator.js";
+// PDFPageValidator 在 SimpleJSONValidator 的基础上，额外验证段落编号连续性（"段落1"→"段落2"→...）
+import { PDFPageValidator } from "./pdf_page_validator.js";
 
 // ============================================================
 // 验证器注册表
@@ -41,7 +43,7 @@ import { SimpleJSONValidator } from "./simple_json_validator.js";
  */
 export const VALIDATORS: Record<string, new (config: Record<string, unknown>) => BaseValidator> = {
   simple_json: SimpleJSONValidator,
-  // pdf_page: PDFPageValidator,  // ⏳ 待迁移（依赖 pdf_to_images）
+  pdf_page: PDFPageValidator,
 };
 
 // ============================================================
@@ -94,3 +96,4 @@ export function getValidator(
 // 而不需要深入到 validators/base.js 或 validators/simple_json_validator.js
 export { BaseValidator };
 export { SimpleJSONValidator };
+export { PDFPageValidator };
