@@ -30,7 +30,7 @@ conductor 是 [LLM_agent](../LLM_agent) 的 TypeScript 重写版本。
 LLM_agent/
 ├── src/
 │   ├── exceptions.py                    ✅ 已迁移 → src/exceptions.ts
-│   ├── safety.py                        🚫 视需求决定
+│   ├── safety.py                        🔀 功能已合并到 llm_client.ts 的 isLlmEnabled()
 │   ├── utils.py                         ✅ 已迁移 → src/utils.ts
 │   ├── concurrent_utils.py              ✅ 已迁移 → src/concurrent_utils.ts
 │   ├── cost_calculator.py               ✅ 已迁移 → src/cost_calculator.ts
@@ -73,7 +73,7 @@ LLM_agent/
 │   └── chat_frontend/                   ✅ 已迁移 → apps/chat_frontend/
 ├── docs/                                ⏳ 待重写（内容针对 Python，需改为 TS 版本）
 ├── examples/                            ⏳ 待重写（Python 示例替换为 TS 示例）
-├── scripts/                             ⏳ 待评估（逐个确认是否需要重写）
+├── scripts/                             ✅ 已迁移 → scripts/
 └── archived/                            🚫 无需迁移
 ```
 

@@ -156,14 +156,17 @@ export interface LlmCallOptions {
 /**
  * 安全熔断检查：LLM 调用是否已启用
  *
- * 这是一个安全机制——当检测到异常时（如成本超限、恶意提示注入等），
- * 可以通过关闭此开关来阻止所有 LLM 调用。
- * 目前固定返回 true（始终启用），待 safety.py 迁移后替换为真实实现。
+ * 读取环境变量 LLM_API_ENABLE，只有明确设为以下值时才允许调用（不区分大小写）：
+ *   "true" / "1" / "yes" / "on"
+ * 其他情况一律返回 false（默认冻结），防止误触产生 API 费用。
  *
- * TODO: 迁移 safety.py 后替换为真实实现
+ * 对应 Python 版 safety.py 的 is_llm_enabled()
  */
 function isLlmEnabled(): boolean {
-  return true;
+  // 从环境变量读取开关值，未设置时默认 "false"（冻结状态）
+  const val = (process.env.LLM_API_ENABLE ?? "false").toLowerCase();
+  // 只有这几个值视为"启用"，其他一律冻结
+  return ["true", "1", "yes", "on"].includes(val);
 }
 
 // ============================================================
