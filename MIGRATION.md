@@ -38,7 +38,7 @@ LLM_agent/
 │   ├── model_manager.py                 🔀 功能已被 model_caller.ts 完全覆盖；src/model_manager.ts 已删除（死代码）
 │   ├── model_caller.py                  ✅ 已迁移 → src/model_caller.ts
 │   ├── conversation_manager.py          🚫 不迁移（对话管理由 conductor workflow 框架自身实现）
-│   ├── pdf_to_images.py                 🚫 TS 生态替代方案待定
+│   ├── pdf_to_images.py                 ✅ 已迁移 → src/pdf_to_images.ts
 │   ├── manage_test_headers.py           🚫 不迁移（pytest 辅助工具）
 │   ├── workflow_engine.py               ✅ 已迁移 → src/workflow_engine.ts
 │   ├── workflow_loader.py               ✅ 已迁移 → src/workflow_loader.ts
@@ -57,8 +57,8 @@ LLM_agent/
 │   │   ├── data_actions.py              ✅ 已迁移 → src/workflow_actions/data_actions.ts
 │   │   ├── io_actions.py                ✅ 已迁移 → src/workflow_actions/io_actions.ts
 │   │   ├── utils.py                     ✅ 已迁移 → src/workflow_actions/utils.ts
-│   │   ├── pdf_actions.py               🚫 低优先级（依赖 pdf_to_images）
-│   │   └── ebook_actions.py             🚫 低优先级
+│   │   ├── pdf_actions.py               ✅ 已迁移 → src/workflow_actions/pdf_actions.ts
+│   │   └── ebook_actions.py             ✅ 已迁移 → src/workflow_actions/ebook_actions.ts
 │   └── cli/
 │       └── clean.py                     ✅ 已迁移 → src/cli/clean.ts
 ├── tests/                               ⏳ 随各模块迁移同步补充
@@ -69,8 +69,8 @@ LLM_agent/
 │   ├── pdf_to_json_20pages/
 │   └── ebook_translation/
 ├── apps/
-│   ├── api_server/                      ⏳ 待迁移（Express/Hono 重写）
-│   └── chat_frontend/                   ⏳ 待适配（对接新 TS 后端 API）
+│   ├── api_server/                      🚫 不迁移（薄壳应用层代码，不属于框架核心；需要时直接 import conductor 几行即可搭建）
+│   └── chat_frontend/                   ✅ 已迁移 → apps/chat_frontend/
 ├── docs/                                ⏳ 待重写（内容针对 Python，需改为 TS 版本）
 ├── examples/                            ⏳ 待重写（Python 示例替换为 TS 示例）
 ├── scripts/                             ⏳ 待评估（逐个确认是否需要重写）
@@ -147,13 +147,9 @@ Python 版 loader 对必填字段缺失的处理不够清晰，例如 `data_proc
 
 ---
 
-### `ConditionalLLMAction` 继承 `LLMCallAction`
+### `ConditionalLLMAction` 继承 `LLMCallAction` ✅
 
-当前 `ConditionalLLMAction` 与 `LLMCallAction` 是平级关系，各自独立实现模型调用逻辑。
-`ConditionalLLMAction` 缺少 JSON 验证、重试、成本统计等能力，与框架整体设计不一致。
-
-重构方案：让 `ConditionalLLMAction` 继承 `LLMCallAction`，复用验证/重试/成本统计，
-仅将固定的 `nextStep` 替换为 `conditionFunc(response)` 动态决定。
+已完成重构：`ConditionalLLMAction` 现在继承自 `LLMCallAction`，复用验证/重试/成本统计逻辑。
 
 ```
 BaseAction                → 计时、日志、错误处理

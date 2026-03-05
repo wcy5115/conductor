@@ -1,0 +1,74 @@
+.wrapper {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.starRow {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+}
+
+.content {
+  color: var(--text-primary);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Streaming dots */
+.dots {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  height: 24px;
+}
+
+.dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--color-star);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* Action buttons */
+.actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 12px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.wrapper:hover .actions {
+  opacity: 1;
+}
+
+.actionBtn {
+  width: 34px;
+  height: 34px;
+  color: var(--text-secondary);
+}
+
+.actionBtn:hover {
+  color: var(--text-primary);
+}

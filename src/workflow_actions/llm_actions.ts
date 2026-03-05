@@ -3,15 +3,19 @@
  *
  * 本模块包含两个与大语言模型（LLM）交互的动作类，是整个工作流系统中最核心的模块之一：
  *
+ * 继承关系：BaseAction → LLMCallAction → ConditionalLLMAction
+ *
  * 1. LLMCallAction —— 标准 LLM 调用动作
  *    调用指定模型处理输入并产生输出，支持：
  *    - 纯文本 / 多模态（自动识别图片路径，转为 Base64 发送）
  *    - JSON 格式验证与自动重试（验证失败后重新调用模型，并可增强提示词）
  *    - 三层验证体系：required_fields → json_rules → 自定义 validator
  *    - 累积 token 用量与成本统计（重试时自动累加）
+ *    - 提供 protected resolveNextStep() 方法，供子类覆盖以实现动态路由
  *
- * 2. ConditionalLLMAction —— 条件 LLM 动作
- *    调用模型后将输出传给外部注入的条件函数，由函数返回值决定下一步走向（动态路由）
+ * 2. ConditionalLLMAction —— 条件 LLM 动作（继承自 LLMCallAction）
+ *    复用父类全部能力，覆盖 resolveNextStep() 方法，
+ *    将模型输出传给外部注入的条件函数，由函数返回值决定下一步走向（动态路由）
  *
  * 调用链路（以 LLMCallAction 为例）：
  *   WorkflowEngine 调用 action.run(context)         ← 继承自 BaseAction
@@ -685,8 +689,10 @@ export class LLMCallAction extends BaseAction {
     }
 
     // ---- 第三步：构造并返回 StepResult ----
+    // 调用 resolveNextStep 而非直接使用 this.nextStep
+    // 默认实现返回固定的 this.nextStep，子类（如 ConditionalLLMAction）可覆盖此方法实现动态路由
     return new StepResult(
-      this.nextStep,
+      this.resolveNextStep(response),
       // data: 将模型响应存入 context.data，键名为 outputKey
       // [this.outputKey] 是计算属性名语法，等价于：{ "output": response }
       { [this.outputKey]: response },
@@ -704,6 +710,19 @@ export class LLMCallAction extends BaseAction {
         json_retry_attempts: jsonAttempt + 1, // 实际尝试次数（1 表示一次通过）
       }
     );
+  }
+
+  /**
+   * 解析下一步 ID（供子类覆盖）
+   *
+   * 默认返回构造时传入的固定 nextStep。
+   * 子类（如 ConditionalLLMAction）可覆盖此方法，根据模型响应动态决定下一步走向。
+   *
+   * @param response 模型的响应内容（可能是原始字符串，也可能是解析后的 JSON 对象）
+   * @returns 下一步的 step ID
+   */
+  protected resolveNextStep(_response: unknown): string {
+    return this.nextStep;
   }
 
   /**
@@ -740,9 +759,13 @@ export class LLMCallAction extends BaseAction {
 /**
  * 条件 LLM 动作
  *
- * 与 LLMCallAction 的区别：
+ * 继承自 LLMCallAction，复用父类的全部能力（模型调用、提示词替换、多模态、
+ * JSON 验证、重试、成本统计），唯一的区别在于 nextStep 的决定方式：
  *   - LLMCallAction 的 nextStep 是固定的（在构造时确定）
  *   - ConditionalLLMAction 的 nextStep 是动态的（由 conditionFunc 根据模型输出决定）
+ *
+ * 实现原理：覆盖父类的 resolveNextStep() 方法，将模型响应传给条件函数，
+ * 由函数返回值决定下一步走向（动态路由）。
  *
  * 使用场景示例——分类路由：
  *   const classifier = new ConditionalLLMAction(
@@ -758,14 +781,10 @@ export class LLMCallAction extends BaseAction {
  *   // 模型回复 "中文" → nextStep = "chinese_pipeline"
  *   // 模型回复 "英文" → nextStep = "english_pipeline"
  *
- * 注意：此类不支持 JSON 验证和重试，适用于简单的分类/路由场景。
- * 如果需要 JSON 验证，请使用 LLMCallAction。
+ * 默认不启用 JSON 验证（validateJson = false），行为与重构前一致。
+ * 如果需要条件动作也支持 JSON 验证，可在 config 中传入相应配置。
  */
-export class ConditionalLLMAction extends BaseAction {
-  /** 模型简称（如 "gpt4"） */
-  readonly model: string;
-  /** 提示词模板，支持 {key} 占位符 */
-  readonly promptTemplate: string;
+export class ConditionalLLMAction extends LLMCallAction {
   /**
    * 条件函数——接收模型响应文本，返回下一步的 ID
    *
@@ -776,8 +795,6 @@ export class ConditionalLLMAction extends BaseAction {
    * 由调用方在构造时注入（依赖注入模式），保持动作类本身与业务逻辑解耦
    */
   readonly conditionFunc: (response: string) => string;
-  /** 输出键名，默认 "output" */
-  readonly outputKey: string;
 
   /**
    * @param model           模型简称
@@ -793,53 +810,26 @@ export class ConditionalLLMAction extends BaseAction {
     outputKey = "output",
     config: Record<string, unknown> = {}
   ) {
-    // name 传 undefined，使用默认类名 "ConditionalLLMAction"
-    super(undefined, config);
-    this.model = model;
-    this.promptTemplate = promptTemplate;
+    // 调用 LLMCallAction 构造函数
+    // nextStep 传 "END"（不会被使用，因为 resolveNextStep 被子类覆盖）
+    // validateJson 传 false（默认不验证，行为与重构前一致）
+    // 其余参数使用默认值：temperature/maxTokens/requiredFields/jsonRules 均为 undefined
+    // jsonRetryMaxAttempts = 3, jsonRetryEnhancePrompt = false
+    super(model, promptTemplate, outputKey, "END", false, undefined, undefined, undefined, undefined, 3, false, config);
     this.conditionFunc = conditionFunc;
-    this.outputKey = outputKey;
   }
 
   /**
-   * 执行条件 LLM 调用
+   * 覆盖父类的 resolveNextStep，用条件函数动态决定下一步
    *
-   * 流程：
-   *   1. 替换提示词模板中的 {key} 占位符
-   *   2. 调用模型获取响应
-   *   3. 将响应传给 conditionFunc，获取动态的 nextStep
-   *   4. 构造 StepResult 返回
+   * 父类 LLMCallAction.execute() 在构造 StepResult 时会调用此方法。
+   * 默认实现返回固定的 this.nextStep，这里改为将模型响应传给 conditionFunc，
+   * 由业务逻辑决定下一步走向。
    *
-   * @param context 工作流上下文
-   * @returns StepResult，nextStep 由 conditionFunc 决定
+   * @param response 模型的响应内容（转为字符串后传给 conditionFunc）
+   * @returns 下一步的 step ID，由 conditionFunc 的返回值决定
    */
-  async execute(context: WorkflowContext): Promise<StepResult> {
-    // 第一步：替换提示词模板中的占位符
-    // 与 LLMCallAction 不同，这里缺少的键不会报错，而是替换为空字符串
-    // 这是因为条件判断场景通常更宽容，缺少某个字段不一定是错误
-    const prompt = this.promptTemplate.replace(
-      /\{(\w+)\}/g,
-      (_, key: string) => String(context.data[key] ?? "")
-    );
-
-    // 第二步：调用模型
-    const result = await callModel(this.model, prompt);
-    const response = result.content;
-    const usage = result.usage;
-
-    // 打印 token 用量（格式：prompt_tokens/completion_tokens/total_tokens）
-    logger.info(
-      `模型调用tokens: ${usage.prompt_tokens}/${usage.completion_tokens}/${usage.total_tokens}`
-    );
-
-    // 第三步：将模型响应传给条件函数，获取动态的下一步 ID
-    const nextStep = this.conditionFunc(response);
-
-    // 第四步：构造并返回结果
-    return new StepResult(
-      nextStep,
-      { [this.outputKey]: response },
-      { model: this.model, condition_result: nextStep }
-    );
+  protected resolveNextStep(response: unknown): string {
+    return this.conditionFunc(String(response));
   }
 }

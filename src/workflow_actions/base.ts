@@ -29,6 +29,10 @@
  *   - SetDataAction（data_actions.ts）—— 设置上下文数据
  *   - IncrementAction（data_actions.ts）—— 计数器自增
  *   - ConcurrentAction（concurrent_actions.ts）—— 并发执行多个子动作
+ *   - PDFToImagesAction（pdf_actions.ts）—— PDF 转图片
+ *   - EpubExtractAction（ebook_actions.ts）—— 从 ePub 提取文本并切分
+ *   - MergeToEpubAction（ebook_actions.ts）—— 合并翻译文本生成 ePub
+ *   - ParseTranslationAction（ebook_actions.ts）—— 解析 LLM 翻译响应
  */
 
 // WorkflowContext 是工作流的全局上下文对象，包含：

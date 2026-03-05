@@ -1,0 +1,38 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.wrapper:hover .actions {
+  opacity: 1;
+}
+
+.actionBtn {
+  width: 30px;
+  height: 30px;
+  color: var(--text-secondary);
+}
+
+.actionBtn:hover {
+  color: var(--text-primary);
+}
+
+.bubble {
+  background-color: var(--bg-user-bubble);
+  color: var(--text-primary);
+  padding: 12px 20px;
+  border-radius: 20px;
+  max-width: 70%;
+  word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
