@@ -32,6 +32,11 @@ import { fileURLToPath } from "url";
 // chat 是 llm_client.ts 提供的简化调用接口，接收 prompt 和连接参数，返回 LlmResult
 // LlmResult 包含 content（AI 回复文本）和 usage（token 用量）
 import { chat, LlmResult, LlmCallOptions } from "./llm_client.js";
+// mockLlmCall 是 mock_llm.ts 提供的模拟 LLM 调用函数
+// isMockModel 判断模型是否为 mock 模型（模型名以 "mock" 开头或 provider 为 "mock"）
+// MockConfig 是 mock 模式的配置类型（mock_mappings 映射表）
+// 当检测到 mock 模型时，callModel 走模拟路径，不发起真实 API 请求
+import { mockLlmCall, isMockModel, MockConfig } from "./mock_llm.js";
 
 /**
  * 简易日志器（与 llm_client.ts 相同的设计理由：保持依赖最小化）
@@ -218,6 +223,11 @@ function findModelsYaml(): string {
  *   1. 定位 models.yaml 文件
  *   2. 读取文件内容并用 js-yaml 解析为 JavaScript 对象
  *   3. 递归替换所有 ${ENV_VAR} 占位符为实际环境变量值
+ *   4. 自动检测并合并同目录下的 models.mock.yaml（如果存在）
+ *
+ * models.mock.yaml 是可选的 mock 模型配置文件，与正式模型分开管理：
+ *   - 存在 → 自动合并到主配置中（mock 配置会覆盖同名的正式配置）
+ *   - 不存在 → 静默跳过，不影响正常运行
  *
  * @returns 解析后的模型配置映射表
  * @throws Error 文件不存在或格式错误
@@ -242,7 +252,23 @@ function loadModelMappings(): ModelMappings {
   }
 
   // 替换所有 ${ENV_VAR} 占位符为实际的环境变量值
-  return resolveEnvPlaceholders(raw) as ModelMappings;
+  const mappings = resolveEnvPlaceholders(raw) as ModelMappings;
+
+  // 自动合并 models.mock.yaml（如果存在）
+  // mock 配置文件与 models.yaml 位于同一目录，文件名固定为 models.mock.yaml
+  const mockYamlPath = yamlPath.replace(/models\.yaml$/, "models.mock.yaml");
+  if (fs.existsSync(mockYamlPath)) {
+    const mockRaw = yaml.load(fs.readFileSync(mockYamlPath, "utf-8"));
+    if (mockRaw && typeof mockRaw === "object") {
+      // Object.assign 将 mock 配置合并到主配置中
+      // mock 配置中的同名键会覆盖主配置（这是预期行为：测试时可临时替换正式模型）
+      const mockMappings = resolveEnvPlaceholders(mockRaw) as ModelMappings;
+      Object.assign(mappings, mockMappings);
+      logger.info(`已加载 mock 模型配置: ${mockYamlPath} (${Object.keys(mockMappings).length} 个模型)`);
+    }
+  }
+
+  return mappings;
 }
 
 /**
@@ -431,7 +457,22 @@ export async function callModel(
   // 第二步：解析出当前启用的配置（处理单配置/多配置列表）
   const config = resolveConfig(entry, modelAlias);
 
-  // 第三步：检查 API 密钥
+  // 第三步（Mock 拦截）：自动检测 mock 模型
+  // 判断条件：模型简称以 "mock" 开头，或 provider 为 "mock"（满足任一即可）
+  // mock 模式不需要真实的 API 密钥和 URL，直接调用 mockLlmCall 生成模拟响应
+  // 工作流的其余逻辑（JSON 验证、成本统计、日志记录）仍然正常运行
+  if (isMockModel(modelAlias, config.provider)) {
+    logger.info(`[Mock] 使用模拟模式: ${modelAlias} (${config.model_name})`);
+    // 从 config 中提取 mock_mappings 字段，构造 MockConfig
+    // mock_mappings 是 prompt → response 的精确映射表
+    // 该字段通过 SingleModelConfig 的 [key: string]: unknown 索引签名允许存在
+    const mockConfig: MockConfig = {
+      mock_mappings: (config["mock_mappings"] as Record<string, string>) ?? {},
+    };
+    return mockLlmCall(prompt, mockConfig, modelAlias);
+  }
+
+  // 第四步：检查 API 密钥
   // 密钥可能为空的原因：${ENV_VAR} 占位符对应的环境变量未设置，替换结果为空字符串
   if (!config.api_key || config.api_key.trim() === "") {
     throw new Error(
@@ -441,7 +482,7 @@ export async function callModel(
     );
   }
 
-  // 第四步：合并参数（调用方参数 → 配置文件参数 → 硬编码默认值）
+  // 第五步：合并参数（调用方参数 → 配置文件参数 → 硬编码默认值）
   // ?? 是空值合并运算符：左侧为 null 或 undefined 时使用右侧的值
   const finalTemperature = temperature ?? config.temperature ?? 0.7;
   const finalMaxTokens = maxTokens ?? config.max_tokens ?? 2000;
@@ -450,7 +491,7 @@ export async function callModel(
 
   logger.info(`调用模型: ${modelAlias} (${config.provider} / ${config.model_name})`);
 
-  // 第五步：处理 OpenRouter 特有的 HTTP 请求头
+  // 第六步：处理 OpenRouter 特有的 HTTP 请求头
   // OpenRouter 是一个 API 聚合平台，它要求请求中携带来源信息：
   //   HTTP-Referer: 调用方的网站 URL（用于流量来源统计）
   //   X-Title:      调用方的应用名称（显示在 OpenRouter 仪表盘中）
@@ -466,7 +507,7 @@ export async function callModel(
     }
   }
 
-  // 第六步：调用 llm_client.chat() 发起请求
+  // 第七步：调用 llm_client.chat() 发起请求
   // chat() 内部会调用 callLlmApi()，成功返回 LlmResult，失败抛出异常
   // 构建 chat 调用参数
   // timeout 只在调用方显式传入时才覆盖，否则使用 llm_client 的默认值（300秒）

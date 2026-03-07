@@ -159,6 +159,59 @@ BaseAction                → 计时、日志、错误处理
 
 ---
 
+### 新增外部通信 Action 类型 ⏳
+
+当前工作流只能通过 `data_process` 注册自定义函数与外部通信，不够声明式。
+需新增两个 Action 类型，让 YAML 直接声明外部调用：
+
+| Action 类 | type 名称 | 用途 | 实现要点 |
+|-----------|-----------|------|----------|
+| `HttpRequestAction` | `http_request` | 发 HTTP 请求（调外部 API） | 用 `fetch` 发请求，响应写入 `context.data` |
+| `SubprocessAction` | `subprocess` | 执行本地命令/脚本 | 用 `child_process.execFile` 执行，stdout 写入 `context.data` |
+
+YAML 用法示例：
+
+```yaml
+# HTTP 请求
+steps:
+  2:
+    type: http_request
+    url: "https://api.example.com/process"
+    method: POST
+    body:
+      text: "{1_response}"
+    headers:
+      Authorization: "Bearer {api_key}"
+
+# 本地命令
+steps:
+  3:
+    type: subprocess
+    command: "python"
+    args: ["scripts/postprocess.py", "--input", "{1_response_file}"]
+```
+
+实现步骤：
+1. 在 `src/workflow_actions/` 新建 `external_actions.ts`，包含两个类
+2. 在 `workflow_loader.ts` 的 switch 中各加一个 case
+3. 补充单元测试
+
+---
+
+### 库化导出入口 ⏳
+
+当前 `src/index.ts` 只有 `console.log("conductor")`，需改为统一 re-export：
+
+```ts
+export { WorkflowEngine, WorkflowContext, StepResult } from "./workflow_engine.js";
+export { WorkflowLoader, loadWorkflowFromYaml } from "./workflow_loader.js";
+// ... 其他公共 API
+```
+
+完成后即可作为 npm 库被外部项目 `import` 使用。
+
+---
+
 ## 参考
 
 - 原项目 YAML 语法文档：`../LLM_agent/docs/workflow_grammar/`

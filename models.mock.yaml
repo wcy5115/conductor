@@ -1,0 +1,32 @@
+# Mock 模型配置文件（开发调试用）
+#
+# 本文件中的模型不会发起真实 API 调用，不产生任何费用。
+# 详细文档见 src/mock_llm.ts
+#
+# 使用方式：
+#   1. 模型名以 "mock" 开头会被自动检测为 mock 模型
+#   2. mock_mappings 中的 key 必须与实际 prompt（占位符替换后）完全一致
+#   3. 匹配成功返回对应 value，不匹配直接报错
+#
+# 不同场景使用不同的 mock 模型，例如：
+#   mock-translate  → 翻译工作流的测试
+#   mock-summary    → 摘要工作流的测试
+
+# ==================== 翻译场景 ====================
+mock-translate:
+  provider: mock
+  api_url: ""
+  api_key: "mock"
+  model_name: mock-translate
+  mock_mappings:
+    "请将以下文本翻译为英文：你好": '{"translation": "Hello"}'
+    "请将以下文本翻译为英文：再见": '{"translation": "Goodbye"}'
+
+# ==================== 摘要场景 ====================
+mock-summary:
+  provider: mock
+  api_url: ""
+  api_key: "mock"
+  model_name: mock-summary
+  mock_mappings:
+    "请总结以下文本：这是一段很长的文本": '{"summary": "这是摘要"}'
