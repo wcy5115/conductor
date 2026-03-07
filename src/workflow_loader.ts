@@ -69,6 +69,10 @@ import {
 // SaveToFileConfig：并发处理时每个结果保存到文件的配置接口
 import { ConcurrentAction, ActionConfig, SaveToFileConfig } from "./workflow_actions/concurrent_actions.js";
 
+// EpubExtractAction：从 ePub 提取文本并按 token 数智能切分为块
+// MergeToEpubAction：将翻译后的对齐文本合并生成新的 ePub + TXT 文件
+import { EpubExtractAction, MergeToEpubAction } from "./workflow_actions/ebook_actions.js";
+
 // saveToFile：将字符串内容写入文件（自动创建父目录）
 import { saveToFile } from "./utils.js";
 
@@ -225,6 +229,8 @@ const SUPPORTED_ACTION_TYPES = [
   "log",
   "concurrent",
   "merge_json_files",
+  "epub_extract",
+  "merge_to_epub",
 ] as const;
 
 // ============================================================
@@ -552,6 +558,10 @@ export class WorkflowLoader {
         return this._createConcurrentActionV2(stepId, config, workflowGraph, workflowDir, stepName);
       case "merge_json_files":
         return this._createMergeJsonFilesActionV2(stepId, config, workflowGraph, workflowDir, stepName);
+      case "epub_extract":
+        return this._createEpubExtractActionV2(stepId, config, workflowGraph, workflowDir, stepName);
+      case "merge_to_epub":
+        return this._createMergeToEpubActionV2(stepId, config, workflowGraph, workflowDir, stepName);
       default:
         // 不支持的类型：列出所有支持的类型，帮助用户排查拼写错误
         throw new Error(
@@ -956,6 +966,92 @@ export class WorkflowLoader {
       nextStep,                                                // nextStep：从图中推断
       stepName,                                                // name：步骤名称
       stepId                                                   // stepId：步骤 ID
+    );
+  }
+
+  /**
+   * 创建 ePub 提取动作
+   *
+   * 对应 YAML 配置示例：
+   *   steps:
+   *     1:
+   *       type: epub_extract
+   *       input_key: "input_epub"           ← 可选：ePub 文件路径的键名（默认 "input_epub"）
+   *       target_tokens: 1000              ← 可选：每块目标 token 数
+   *       emergency_threshold: 1500        ← 可选：超出此值触发强制截断
+   *       save_to_file:                    ← 可选：断点续传配置
+   *         output_dir: "{paths.original}"
+   *         filename_template: "chunk_{index:04d}.txt"
+   *
+   * @param stepId       步骤 ID
+   * @param config       步骤配置
+   * @param workflowGraph 工作流图
+   * @param _workflowDir 工作流目录（本方法未使用）
+   * @param stepName     步骤名称
+   * @returns EpubExtractAction 实例
+   */
+  private _createEpubExtractActionV2(
+    stepId: string,
+    config: Record<string, unknown>,
+    workflowGraph: WorkflowGraph,
+    _workflowDir: string,
+    stepName: string
+  ): EpubExtractAction {
+    // 从工作流图获取下一步
+    const nextSteps = workflowGraph.getNextSteps(stepId);
+    const nextStep = nextSteps.length > 0 ? nextSteps[0] : "END";
+
+    return new EpubExtractAction(
+      (config["input_key"] as string) ?? "input_epub",                              // inputKey
+      autoOutputKey(stepId),                                                         // outputKey：自动生成（如 "1_response"）
+      (config["target_tokens"] as number) ?? 1000,                                   // targetTokens
+      (config["emergency_threshold"] as number) ?? 1500,                             // emergencyThreshold
+      nextStep,                                                                      // nextStep：从图中推断
+      stepName,                                                                      // name
+      config["save_to_file"] as { output_dir: string; filename_template?: string } | undefined, // saveToFile
+    );
+  }
+
+  /**
+   * 创建合并为 ePub 动作
+   *
+   * 对应 YAML 配置示例：
+   *   steps:
+   *     4:
+   *       type: merge_to_epub
+   *       aligned_key: "3_response"                ← 可选：对齐结果键名
+   *       aligned_dir: "artifacts/aligned"         ← 可选：对齐文件目录
+   *       output_dir: "results"                    ← 可选：输出目录
+   *       output_filename: "translated.epub"       ← 可选：输出文件名
+   *       book_title: "Translated Book"            ← 可选：ePub 书名
+   *
+   * @param stepId       步骤 ID
+   * @param config       步骤配置
+   * @param workflowGraph 工作流图
+   * @param _workflowDir 工作流目录（本方法未使用）
+   * @param stepName     步骤名称
+   * @returns MergeToEpubAction 实例
+   */
+  private _createMergeToEpubActionV2(
+    stepId: string,
+    config: Record<string, unknown>,
+    workflowGraph: WorkflowGraph,
+    _workflowDir: string,
+    stepName: string
+  ): MergeToEpubAction {
+    // 从工作流图获取下一步
+    const nextSteps = workflowGraph.getNextSteps(stepId);
+    const nextStep = nextSteps.length > 0 ? nextSteps[0] : "END";
+
+    return new MergeToEpubAction(
+      (config["aligned_key"] as string) ?? "3_response",            // alignedKey
+      (config["aligned_dir"] as string) ?? "artifacts/aligned",     // alignedDir
+      (config["output_dir"] as string) ?? "results",                // outputDir
+      (config["output_filename"] as string) ?? "translated.epub",   // outputFilename
+      (config["book_title"] as string) ?? "Translated Book",        // bookTitle
+      autoOutputKey(stepId),                                         // outputKey：自动生成
+      nextStep,                                                      // nextStep：从图中推断
+      stepName,                                                      // name
     );
   }
 }
