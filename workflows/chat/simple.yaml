@@ -1,0 +1,15 @@
+project_name: "chat_simple"
+name: "简单对话"
+description: "直接调用LLM"
+
+workflow_graph: "1 -> END"
+
+steps:
+  "1":
+    name: "LLM调用"
+    type: "llm"
+    model: "{model}"
+    prompt: "{user_input}"
+    temperature: 0.7
+    max_tokens: 2000
+    validate_json: false

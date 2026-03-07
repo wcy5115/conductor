@@ -1,0 +1,167 @@
+# 电子书翻译工作流
+# 从ePub提取文本 → 并发翻译 → 句子级对齐 → 生成中英对照ePub
+
+project_name: "ebook_translation"
+name: "电子书翻译流水线"
+description: "用LLM_agent框架实现电子书翻译，保留原E_book_translation项目的提示词逻辑"
+
+# 路径配置
+paths:
+  original: "artifacts/original"      # 原文文本块
+  translated: "artifacts/translated"  # 翻译结果
+  aligned: "artifacts/aligned"        # 对齐结果
+  results: "results"                  # 最终成果
+
+# 工作流图：提取 -> 翻译 -> 对齐 -> 生成 -> 结束
+workflow_graph: "1 -> 2 -> 3 -> 4 -> END"
+
+steps:
+  # ========================================
+  # 步骤1：提取并切分文本
+  # ========================================
+  "1":
+    name: "提取并切分文本"
+    type: "epub_extract"
+    input_key: "input_epub"
+    target_tokens: 1000       # 每块目标 token 数
+    emergency_threshold: 1500 # 超出此值触发强制截断
+    save_to_file:
+      output_dir: "{paths.original}"
+      filename_template: "chunk_{index:04d}.txt"
+    # 输出：1_response (文本块列表)
+
+  # ========================================
+  # 步骤2：并发翻译（JSON格式，简化版）
+  # ========================================
+  "2":
+    name: "并发翻译"
+    type: "concurrent"
+    items_key: "1_response"  # 使用步骤1的文本块列表
+    max_concurrent: 5        # 同时翻译5个块
+    task_dispatch_delay: 1.0 # 每个任务间隔1秒（避免API限流）
+    fail_on_error: true      # 任何块重试耗尽后终止，防止步骤3用残缺数据运行
+
+    # 保存每个翻译结果到文件（断点续传）
+    save_to_file:
+      output_dir: "{paths.translated}"
+      filename_template: "trans_{index:04d}.txt"
+      data_key: "translation_result.translated_text"  # 点路径：直接从 llm_call 输出中提取
+
+    # 翻译子流程
+    process_steps:
+      - type: "llm_call"
+        model: "deepseek-V3.2-nonthinking"
+        temperature: 0.3
+        max_tokens: 4000
+        validate_json: true  # 验证并解析 JSON 格式
+        required_fields: ["translated_text"]  # 检查字段存在且非空
+
+
+        prompt: |
+          你是一位专业的中译英翻译引擎。
+
+          **翻译要求**
+          1. 准确传达原文含义，不遗漏、不添加
+          2. 保持原文的语气、风格和术语
+          3. 确保译文流畅自然
+
+          **原文**
+          {text}
+
+          **返回格式（纯JSON）**
+          {{
+            "translated_text": "完整英文翻译"
+          }}
+
+        output_key: "translation_result"
+
+    # 输出：2_response (翻译结果统计)
+
+  # ========================================
+  # 步骤3：并发对齐（JSON格式，简化版）
+  # ========================================
+  "3":
+    name: "句子级对齐"
+    type: "concurrent"
+    items_key: "1_response"  # 遍历原文文本块
+    max_concurrent: 3        # 同时对齐3个块
+    task_dispatch_delay: 1.0
+
+    # 保存每个对齐结果
+    save_to_file:
+      output_dir: "{paths.aligned}"
+      filename_template: "aligned_{index:04d}.txt"
+      data_key: "alignment_result.aligned_text"  # 点路径：直接从 llm_call 输出中提取
+
+    # 对齐子流程
+    process_steps:
+      # 读取对应的翻译结果（需要原文+译文）
+      - type: "read_file"
+        path_template: "{paths.translated}/trans_{index:04d}.txt"
+        output_key: "translated_text"
+
+      # 调用LLM对齐
+      - type: "llm_call"
+        model: "deepseek-V3.2-nonthinking"
+        temperature: 0.2
+        max_tokens: 8000
+        validate_json: true
+        required_fields: ["aligned_text"]  # 检查字段存在且非空
+
+        prompt: |
+          你是一个高精度的文本对齐引擎，任务是将英文原文与中文译文逐句对齐。
+
+          **对齐规则**
+          1. 以句子为单位对齐，中英文交替排列
+          2. 格式：先中文后英文，用空格分隔
+          3. 同一段落内的句子对用空格连接
+          4. 不同段落之间用空行（两个换行符）分隔
+          5. 进行高精度语义分析，处理一对多、多对一的情况
+          6. **不要修改或重新翻译所提供的文本，只需格式化对齐**
+
+          **中文**
+          {text}
+
+          **英文**
+          {translated_text}
+
+          **返回格式（纯JSON）**
+          {{
+            "aligned_text": "中文句一。 English sentence one. 中文句二。 English sentence two."
+          }}
+
+        output_key: "alignment_result"
+
+    # 输出：3_response (对齐结果统计)
+
+  # ========================================
+  # 步骤4：合并生成ePub
+  # ========================================
+  "4":
+    name: "生成ePub电子书"
+    type: "merge_to_epub"
+    aligned_key: "3_response"
+    aligned_dir: "{paths.aligned}"
+    output_dir: "{paths.results}"
+    output_filename: "{book_name}_translated.epub"
+    book_title: "{book_name}"
+    # 输出：4_response (ePub路径)
+
+display:
+  steps:
+    "1":
+      label: "文本提取"
+      show: item_count
+    "2":
+      label: "翻译"
+      show: concurrent_stats
+    "3":
+      label: "对齐"
+      show: concurrent_stats
+    "4":
+      label: "输出文件"
+      show: file_output
+      keys: ["output_epub", "output_txt"]
+
+# author: User | created: 2026-02-05 | updated: 2026-02-06
+# JSON格式输出 + validate_json自动解析，prompt大幅精简，并发+断点续传

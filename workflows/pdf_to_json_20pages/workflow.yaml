@@ -1,0 +1,146 @@
+# PDF前20页提取为JSON工作流
+# 提取PDF前20页的文字内容为JSON格式并保存到本地
+
+project_name: "pdf_to_json_20pages" # 项目名称，作为data下的文件夹名
+name: "PDF前20页转JSON"
+description: "提取PDF前20页的文字内容为JSON格式，每页一个JSON对象"
+
+# 路径配置 - 所有路径相对于项目根目录 (data/pdf_to_json_20pages/)
+# ⭐ 标准结构：artifacts/（中间产物）、results/（最终结果）、logs/（日志）
+paths:
+  images: "artifacts/images" # 图片目录（中间产物）
+  pages: "artifacts/pages" # JSON页面目录（中间产物）
+  output: "results/pdf_pages.json" # 最终合并的JSON文件
+  logs: "logs" # 日志目录
+
+# 流程图：PDF转图片 -> 并发OCR（自动保存每页） -> 合并JSON文件 -> 结束
+workflow_graph: "1 -> 2 -> 3 -> END"
+
+steps:
+  # ========================================
+  # 步骤1：PDF转图片（只转前20页）
+  # ========================================
+  "1":
+    name: "PDF转图片前20页"
+    type: "pdf_to_images"
+    pdf_path: "{input_pdf}"
+    output_dir: "{paths.images}" # 使用paths配置
+    dpi: 150
+    page_range: "1-367" # 只处理前20页
+    # output_key 自动命名为: 1_response (包含输出目录路径)
+    # 同时会自动添加: 1_response_files (包含所有图片文件路径列表)
+
+  # ========================================
+  # 步骤2：并发OCR处理，提取为JSON并自动保存
+  # ========================================
+  "2":
+    name: "并发提取文字为JSON格式（自动保存每页）"
+    type: "concurrent"
+    items_key: "1_response_files" # 使用步骤1生成的图片文件列表
+    max_concurrent: 9 # 并发数（可根据API限制调整）
+    task_dispatch_delay: 0.5 # 任务派发延迟（秒），避免瞬间大量请求
+    circuit_breaker_threshold: 10 # 连续失败10次触发熔断
+
+    # ⭐ 自动保存配置：每处理完一页立即保存到单独文件
+    save_to_file:
+      output_dir: "{paths.pages}" # 使用paths配置
+      filename_template: "page_{index:04d}.json" # 文件名格式：page_0001.json（四位数字）
+      data_key: "page_json" # 要保存的数据键（来自process_steps的输出）
+
+    # 每张图片的处理流程
+    process_steps:
+      - type: "llm_call"
+        model: "qwen-vl-max" # 可换成其他模型: grok, qwen72b, etc.
+        prompt: |
+          请提取页面文字并按自然段分割，返回JSON格式。
+
+          **页码规则**
+          - 保持原格式：阿拉伯数字（1,2,3）或罗马数字（i,ii,iii）
+          - 无页码时填写"kong"
+
+          **内容分割规则**
+          1. 按自然段分割（空行、缩进、格式变化）
+          2. 小标题单独成段
+          3. 代码块、引用、诗歌保持完整
+          4. 从"段落1"开始，依次编号为"段落2"、"段落3"...
+          5. 编号必须连续，不能跳号
+
+          **返回格式（纯JSON）**
+          正常页面：
+          {{
+            "页码": "页码或kong",
+            "内容": {{
+              "段落1": "第一段内容",
+              "段落2": "第二段内容",
+              "段落3": "第三段内容"
+            }}
+          }}
+
+          空页面：
+          {{
+            "页码": "页码或kong",
+            "内容": "kong"
+          }}
+        output_key: "page_json"
+        temperature: 0.0 # 低温度提高段落划分一致性
+        max_tokens: 8000
+        validate_json: true # ⭐ 验证返回内容为JSON格式
+        required_fields: ["页码", "内容"] # ⭐ 检查字段存在且非空（防止AI写错字段名）
+        validator: "pdf_page" # ⭐ 验证段落编号连续性（段落1、段落2、段落3...）
+
+  # ========================================
+  # 步骤3：合并所有单独的JSON文件为一个数组
+  # ========================================
+  "3":
+    name: "合并所有页面JSON文件"
+    type: "merge_json_files"
+    input_dir: "{paths.pages}" # 使用paths配置
+    output_file: "{paths.output}" # 使用paths配置
+    pattern: "page_*.json" # 只合并page_开头的文件
+    sort_by: "filename" # 按文件名排序，确保页面顺序正确
+    # output_key 自动命名为: 3_response (包含合并后的数据数组)
+
+display:
+  steps:
+    "2":
+      label: "OCR处理"
+      show: concurrent_stats
+
+# 工作流元数据
+metadata:
+  author: "User"
+  created_at: "2025-11-27"
+  tags: ["pdf", "json", "ocr", "前20页"]
+  notes: |
+    工作流特点：
+    1. 只处理PDF前20页
+    2. 并发处理，速度快（最多5个并发）
+    3. 每页OCR完成后立即保存到单独JSON文件（节省内存）
+    4. 所有页面处理完后自动合并成一个JSON数组
+    5. ⭐ 自动断点续存（强制启用）：
+       - 自动检测已存在的JSON文件
+       - 验证文件内容是否有效（非空、格式正确）
+       - 跳过已处理的页面，节省API调用和成本
+       - 支持随时中断和恢复，无需手动配置
+       - 支持非连续处理（如只重新处理失败的页面）
+    6. 熔断器保护（连续失败10次自动停止）
+    7. 成本自动统计（每页和总计）
+
+    文件结构（标准）：
+    - data/artifacts/images/     (中间图片，可清理)
+    - data/artifacts/pages/      (中间JSON，可清理)
+      - page_0001.json
+      - page_0002.json
+      - ...
+    - data/results/pdf_pages.json (最终输出，保留)
+    - data/logs/                  (日志，保留)
+      - workflow.log              (人类可读)
+      - workflow.jsonl            (机器可读)
+
+    清理命令：删除 artifacts/ 即可（保留 results/ 和 logs/）
+
+
+    断点续存示例：
+    - 第1次运行：处理1-10页，程序崩溃
+    - 第2次运行：自动跳过1-10页，继续处理11-20页
+    - 成本节省：避免重复调用API，节省¥0.096（10页×¥0.0096）

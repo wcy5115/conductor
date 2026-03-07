@@ -73,6 +73,10 @@ import { ConcurrentAction, ActionConfig, SaveToFileConfig } from "./workflow_act
 // MergeToEpubAction：将翻译后的对齐文本合并生成新的 ePub + TXT 文件
 import { EpubExtractAction, MergeToEpubAction } from "./workflow_actions/ebook_actions.js";
 
+// PDFToImagesAction：将 PDF 文件按页转换为图片（PNG），支持自定义 DPI 和页面范围
+// 本文件中 _createPdfToImagesActionV2() 会创建此类的实例
+import { PDFToImagesAction } from "./workflow_actions/pdf_actions.js";
+
 // saveToFile：将字符串内容写入文件（自动创建父目录）
 import { saveToFile } from "./utils.js";
 
@@ -231,6 +235,7 @@ const SUPPORTED_ACTION_TYPES = [
   "merge_json_files",
   "epub_extract",
   "merge_to_epub",
+  "pdf_to_images",
 ] as const;
 
 // ============================================================
@@ -562,6 +567,8 @@ export class WorkflowLoader {
         return this._createEpubExtractActionV2(stepId, config, workflowGraph, workflowDir, stepName);
       case "merge_to_epub":
         return this._createMergeToEpubActionV2(stepId, config, workflowGraph, workflowDir, stepName);
+      case "pdf_to_images":
+        return this._createPdfToImagesActionV2(stepId, config, workflowGraph, workflowDir, stepName);
       default:
         // 不支持的类型：列出所有支持的类型，帮助用户排查拼写错误
         throw new Error(
@@ -1052,6 +1059,63 @@ export class WorkflowLoader {
       autoOutputKey(stepId),                                         // outputKey：自动生成
       nextStep,                                                      // nextStep：从图中推断
       stepName,                                                      // name
+    );
+  }
+
+  /**
+   * 创建 PDF 转图片动作
+   *
+   * 对应 YAML 配置示例：
+   *   steps:
+   *     1:
+   *       type: pdf_to_images
+   *       pdf_path: "{input_pdf}"                ← 必填：PDF 文件路径（支持模板变量）
+   *       output_dir: "{paths.images}"           ← 必填：图片输出目录
+   *       dpi: 150                               ← 可选：转换分辨率（默认 150）
+   *       page_range: "1-20"                     ← 可选：页面范围（如 "1-10"、"1-5,10,15-20"）
+   *
+   * 工作原理：
+   *   1. 使用 pdf-poppler 将 PDF 按页转换为 PNG 图片
+   *   2. 输出三个键到 context.data：
+   *      - {outputKey}：图片输出目录路径
+   *      - {outputKey}_files：所有图片文件的完整路径列表
+   *      - {outputKey}_count：图片文件数量
+   *
+   * @param stepId       步骤 ID
+   * @param config       步骤配置
+   * @param workflowGraph 工作流图
+   * @param _workflowDir 工作流目录（本方法未使用）
+   * @param stepName     步骤名称
+   * @returns PDFToImagesAction 实例
+   */
+  private _createPdfToImagesActionV2(
+    stepId: string,
+    config: Record<string, unknown>,
+    workflowGraph: WorkflowGraph,
+    _workflowDir: string,
+    stepName: string
+  ): PDFToImagesAction {
+    // ---- 必填字段前置检查 ----
+    if (!config["pdf_path"]) {
+      throw new Error(`步骤 ${stepId} 缺少必填字段 'pdf_path'`);
+    }
+    if (!config["output_dir"]) {
+      throw new Error(`步骤 ${stepId} 缺少必填字段 'output_dir'`);
+    }
+
+    // 从工作流图获取下一步
+    const nextSteps = workflowGraph.getNextSteps(stepId);
+    const nextStep = nextSteps.length > 0 ? nextSteps[0] : "END";
+
+    return new PDFToImagesAction(
+      config["pdf_path"] as string,                                 // pdfPath：PDF 文件路径
+      config["output_dir"] as string,                               // outputDir：图片输出目录
+      (config["dpi"] as number) ?? 150,                             // dpi：转换分辨率，默认 150
+      config["page_range"] as string | undefined,                   // pageRange：页面范围，undefined 表示全部
+      autoOutputKey(stepId),                                         // outputKey：自动生成（如 "1_response"）
+      nextStep,                                                      // nextStep：从图中推断
+      stepName,                                                      // name：步骤名称
+      stepId,                                                        // stepId：步骤 ID
     );
   }
 }

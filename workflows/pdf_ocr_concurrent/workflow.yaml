@@ -1,0 +1,90 @@
+# PDF OCR 并发处理工作流
+# 展示原子化操作组合：PDF转图片 + 并发OCR
+# 
+# 使用方法：
+# 1. 准备PDF文件
+# 2. 设置环境变量 SILICONFLOW_API_KEY
+# 3. 运行工作流
+
+project_name: "pdf_ocr_concurrent"  # 项目名称，作为data下的文件夹名
+name: "PDF OCR 并发处理"
+description: "原子化操作组合示例：PDF转图片 + 并发OCR提取文字"
+version: "2.0"
+
+# 工作流程图：PDF转图片 -> 并发OCR -> 保存结果 -> 结束
+workflow_graph: "1 -> 2 -> 3 -> END"
+
+# 初始输入数据（仅作文档说明，实际运行时通过命令行传入）
+
+initial_data:
+  input_pdf: "data/input.pdf"  # PDF文件路径
+  output_images_dir: "data/pdf_images"  # 图片输出目录
+  output_texts_dir: "data/ocr_texts"  # 文本输出目录
+
+steps:
+  # ========================================
+  # 步骤1：PDF转图片（原子操作）
+  # ========================================
+  "1":
+    name: "PDF转图片"
+    type: "pdf_to_images"
+    pdf_path: "{input_pdf}"
+    output_dir: "{output_images_dir}"
+    dpi: 150
+    # page_range: "1-10"  # 可选：只转换指定页面
+    output_key: "pdf_images_dir"
+  
+  # ========================================
+  # 步骤2：并发OCR处理（组合操作）
+  # ========================================
+  "2":
+    name: "渐进式并发OCR提取文字"
+    type: "concurrent"
+    items_key: "pdf_images_dir_files"  # 从步骤1获取图片列表
+    max_concurrent: 5  # 最大并发任务数（包含文件I/O和API调用）
+    task_dispatch_delay: 0.5  # 任务派发延迟（秒），平滑负载
+    circuit_breaker_threshold: 10  # 熔断器阈值
+    output_key: "ocr_results"
+    
+    # 每个图片的处理流程
+    process_steps:
+      # 子步骤：调用LLM进行OCR
+      - type: "llm_call"
+        model: "qwen72b"  # 使用 Qwen 72B 模型
+        prompt: |
+          请提取图片中的所有文字内容，包括任何可见的文本、标题、页码等。
+          直接返回原始文本，不要添加任何解释、注释或格式标记。
+        output_key: "ocr_text"
+        temperature: 0.1  # OCR任务使用低温度
+        max_tokens: 4096
+        validate_json: false  # 不验证JSON格式（返回纯文本）
+  
+  # ========================================
+  # 步骤3：保存结果
+  # ========================================
+  "3":
+    name: "保存OCR结果"
+    type: "log"
+    message_template: |
+      OCR处理完成！
+      成功: {ocr_results_success_count}
+      失败: {ocr_results_failed_count}
+    log_level: "INFO"
+
+
+# 工作流元数据
+metadata:
+  author: "LLM Agent"
+  created_at: "2025-01-22"
+  tags: ["pdf", "ocr", "concurrent", "atomic"]
+  notes: |
+    这个工作流展示了原子化操作的组合：
+    1. PDF转图片 - 独立的原子操作
+    2. 图片转Base64 - 在 llm_client 中自动完成
+    3. 并发OCR - 使用 ConcurrentAction 组合多个原子操作
+    
+    优势：
+    - 每个操作职责单一，易于测试
+    - 可以在YAML中自由组合
+    - 并发参数可灵活调整
+    - 支持断点续传和熔断器
