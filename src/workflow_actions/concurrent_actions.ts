@@ -537,6 +537,32 @@ export class ConcurrentAction extends BaseAction {
             allCosts.push(costInfo as unknown as CostResult);
           }
         } catch (e) {
+          // ----- 宽松模式：上游文件缺失时自动跳过此项 -----
+          // Node.js 的文件未找到错误携带 code === "ENOENT"，等价于 Python 的 FileNotFoundError
+          // 当 failOnError 为 false 时，缺失文件不应中断整个批次，只需跳过当前 item
+          // 典型场景：上一步骤只成功处理了部分文件，本步骤并发读取时部分文件不存在
+          const isFileNotFound = e instanceof Error
+            && (e as NodeJS.ErrnoException).code === "ENOENT";
+          if (isFileNotFound && !this.failOnError) {
+            const elapsed = ((Date.now() - taskStart) / 1000).toFixed(1);
+            logger.warn(
+              `[步骤${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
+              `上游文件缺失，自动跳过(耗时${elapsed}s): ${e}`
+            );
+            if (slog) {
+              slog.logEvent("concurrent_task_skip", {
+                step_id: this.stepId,
+                index: index + 1,
+                total: items.length,
+                item: _label,
+                reason: "upstream_file_missing",
+                error: String(e).slice(0, 200),
+                duration: parseFloat(elapsed),
+              }, "WARNING");
+            }
+            return ["skipped", { reason: "upstream_file_missing", item: String(item), index }];
+          }
+
           // 捕获 LLMValidationError 时，即使失败也要记录已消耗的成本
           if (e instanceof LLMValidationError) {
             // LLMValidationError 携带 cost_info，确保重试成本不丢失

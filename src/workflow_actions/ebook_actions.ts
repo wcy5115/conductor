@@ -290,6 +290,10 @@ export class EpubExtractAction extends BaseAction {
   private readonly emergencyThreshold: number;
   // nextStep：执行完毕后跳转到的下一步 ID
   private readonly nextStep: string;
+  // saveToFile：可选的断点续传配置
+  // 如果配置了该字段，提取后的文本块会保存到文件，下次运行时直接从文件恢复跳过 ePub 解析
+  // 配置格式：{ output_dir: "data/{project}/original", filename_template: "chunk_{index:04d}.txt" }
+  private readonly saveToFile?: { output_dir: string; filename_template?: string };
 
   constructor(
     inputKey: string = "input_epub",
@@ -298,6 +302,7 @@ export class EpubExtractAction extends BaseAction {
     emergencyThreshold: number = 1500,
     nextStep: string = "2",
     name: string = "提取并切分文本",
+    saveToFile?: { output_dir: string; filename_template?: string },
     config: Record<string, unknown> = {}
   ) {
     super(name, config);
@@ -306,6 +311,7 @@ export class EpubExtractAction extends BaseAction {
     this.targetTokens = targetTokens;
     this.emergencyThreshold = emergencyThreshold;
     this.nextStep = nextStep;
+    this.saveToFile = saveToFile;
   }
 
   async execute(context: WorkflowContext): Promise<StepResult> {
@@ -313,6 +319,40 @@ export class EpubExtractAction extends BaseAction {
     const epubPath = context.data[this.inputKey] as string | undefined;
     if (!epubPath) {
       throw new Error(`缺少输入路径: ${this.inputKey}`);
+    }
+
+    // ----- 断点续传：如果文本块文件已存在，直接从文件恢复 -----
+    // 当 saveToFile 配置了 output_dir 且目录中已有 chunk_*.txt 文件时，
+    // 说明之前的运行已经完成了 ePub 提取，无需重复解析（ePub 解析较慢）
+    if (this.saveToFile) {
+      // 用 context.data 中的值替换路径模板中的占位符
+      // 例如 output_dir: "{paths.original}" → "data/mybook/original"
+      let resolvedDir = this.saveToFile.output_dir;
+      for (const [key, value] of Object.entries(context.data)) {
+        resolvedDir = resolvedDir.replaceAll(`{${key}}`, String(value));
+      }
+      const outputDir = path.resolve(resolvedDir);
+
+      // 检查目录中是否已有 chunk_*.txt 文件
+      if (fs.existsSync(outputDir)) {
+        const existingFiles = fs.readdirSync(outputDir)
+          .filter((f) => /^chunk_\d+\.txt$/.test(f))
+          .sort();
+
+        if (existingFiles.length > 0) {
+          // 从已有文件恢复文本块列表
+          const chunkList = existingFiles.map((f, i) => ({
+            index: i + 1,
+            text: fs.readFileSync(path.join(outputDir, f), "utf-8"),
+          }));
+          logger.info(`从已有文本块文件恢复 ${chunkList.length} 个块，跳过 epub 提取`);
+          return new StepResult(
+            this.nextStep,
+            { [this.outputKey]: chunkList },
+            { chunk_count: chunkList.length, source: "cache" }
+          );
+        }
+      }
     }
 
     logger.info(`开始提取ePub: ${epubPath}`);
@@ -365,6 +405,32 @@ export class EpubExtractAction extends BaseAction {
     }));
 
     logger.info(`提取完成，共切分为 ${chunkList.length} 个文本块`);
+
+    // ----- 保存文本块到文件（供断点续传使用） -----
+    // 将每个文本块写入独立的 .txt 文件，下次运行时可直接从文件恢复
+    if (this.saveToFile) {
+      let resolvedDir = this.saveToFile.output_dir;
+      for (const [key, value] of Object.entries(context.data)) {
+        resolvedDir = resolvedDir.replaceAll(`{${key}}`, String(value));
+      }
+      const outputDir = path.resolve(resolvedDir);
+      fs.mkdirSync(outputDir, { recursive: true });
+
+      // 文件名模板，默认 "chunk_{index:04d}.txt"
+      const template = this.saveToFile.filename_template ?? "chunk_{index:04d}.txt";
+      for (const chunk of chunkList) {
+        // 简单替换 {index:04d} 格式的占位符为零补全的数字
+        const filename = template.replace(
+          /\{index(?::(\d+)d)?\}/,
+          (_, width) => {
+            const w = width ? parseInt(width, 10) : 0;
+            return String(chunk.index).padStart(w, "0");
+          }
+        );
+        fs.writeFileSync(path.join(outputDir, filename), chunk.text, "utf-8");
+      }
+      logger.info(`已保存 ${chunkList.length} 个文本块到 ${outputDir}`);
+    }
 
     return new StepResult(
       this.nextStep,
