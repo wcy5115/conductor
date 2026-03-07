@@ -98,6 +98,97 @@ export function isValidJsonFile(filepath: string, minSize = 10): boolean {
 }
 
 /**
+ * 验证输出文件是否已存在且有效（断点续存用）
+ *
+ * 根据文件扩展名选择不同的验证策略：
+ *   - .json → 调用 isValidJsonFile()，尝试解析 JSON 并检查内容非空
+ *   - 其他（.txt 等）→ 只要文件存在且非空即视为有效
+ *
+ * 这是对 isValidJsonFile 的上层封装，用于并发处理的断点续存检查。
+ * Python 版在 concurrent_actions.py 中内联实现，这里抽取为独立函数便于复用。
+ *
+ * @param filepath 文件路径
+ * @returns true 表示文件有效（应跳过处理），false 表示需要（重新）处理
+ */
+export function isValidOutputFile(filepath: string): boolean {
+  // 第一步：检查文件是否存在
+  if (!fs.existsSync(filepath)) return false;
+
+  // 第二步：检查文件大小是否大于 0（空文件视为无效）
+  const stat = fs.statSync(filepath);
+  if (stat.size === 0) return false;
+
+  // 第三步：根据扩展名选择验证方式
+  // path.extname() 返回含点号的扩展名，如 ".json"、".txt"
+  const ext = path.extname(filepath).toLowerCase();
+
+  if (ext === ".json") {
+    // JSON 文件：需要完整验证（可解析 + 内容非空）
+    // 如果文件是写到一半中断的半截 JSON，isValidJsonFile 会返回 false → 触发重新处理
+    return isValidJsonFile(filepath);
+  }
+
+  // 非 JSON 文件（如 .txt、.md 等）：只要文件存在且非空即视为有效
+  // 因为无法像 JSON 那样通过解析来检测内容完整性，
+  // 所以需要配合原子写入（先写 .tmp 再 rename）来保证文件要么完整要么不存在
+  return true;
+}
+
+/**
+ * 原子写入文件：先写入临时文件，完成后 rename 替换目标文件
+ *
+ * 为什么不直接 writeFileSync？
+ *   如果进程在 writeFileSync 执行过程中被中断（崩溃、Ctrl+C、断电），
+ *   目标文件可能只写入了部分内容，变成"半截文件"。
+ *   下次断点续存时，非 JSON 文件只检查"是否存在且非空"，
+ *   会把半截文件误判为有效，导致数据丢失。
+ *
+ * 原子写入的原理：
+ *   1. 清理上次崩溃可能遗留的 .tmp 文件
+ *   2. 将内容写入 filepath + ".tmp" 临时文件
+ *   3. 用 fs.renameSync() 将 .tmp 替换为目标文件
+ *   rename 在同一文件系统上是原子操作，所以目标文件要么是旧的完整版，要么是新的完整版，
+ *   不会出现"写到一半"的状态。
+ *
+ * @param filepath 目标文件路径
+ * @param content  要写入的内容字符串
+ */
+export function atomicWriteFileSync(filepath: string, content: string): void {
+  // 临时文件路径：在原文件名后追加 ".tmp"
+  // 例如 "output/page_001.json" → "output/page_001.json.tmp"
+  const tmpPath = filepath + ".tmp";
+
+  // 第一步：清理上次崩溃可能遗留的 .tmp 文件
+  // 如果上次运行在写入 .tmp 后、rename 前崩溃，.tmp 文件会残留
+  try {
+    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+  } catch {
+    // 删除失败不影响后续逻辑（文件可能已被其他进程清理）
+  }
+
+  try {
+    // 第二步：确保目标文件的父目录存在
+    fs.mkdirSync(path.dirname(filepath), { recursive: true });
+
+    // 第三步：将内容写入临时文件
+    fs.writeFileSync(tmpPath, content, "utf-8");
+
+    // 第四步：原子替换——将临时文件 rename 为目标文件
+    // renameSync 在同一文件系统上是原子操作
+    // 在 Windows 上，renameSync 也能覆盖已存在的目标文件（Node.js 内部处理了兼容性）
+    fs.renameSync(tmpPath, filepath);
+  } catch (e) {
+    // 写入或 rename 失败时，清理临时文件避免残留
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      // 清理失败不再抛出，避免掩盖原始错误
+    }
+    throw e;
+  }
+}
+
+/**
  * 确保目录结构存在，创建必要的子目录
  *
  * @param baseDir 基础目录

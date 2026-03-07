@@ -211,7 +211,7 @@ export async function callLlmApi(
   const {
     temperature = 0.7,
     max_tokens = 2000,
-    timeout = 120,
+    timeout = 300,
     max_retries = 3,
     // retry_delay 默认从环境变量 NETWORK_RETRY_DELAY 读取，若未设置则为 5 秒
     // parseFloat 将字符串转为浮点数（环境变量都是字符串）

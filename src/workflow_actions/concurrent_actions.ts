@@ -35,14 +35,16 @@ import { ReadFileAction } from "./io_actions.js";
 // safeGetCostInfo 安全提取成本信息，兼容多种字段命名，缺失字段自动补零
 // createZeroCostInfo 创建全零的成本信息字典，用作默认值
 // formatErrorContext 将异常、索引、item 等拼成一行可读的错误日志字符串
-// isValidJsonFile 检查 JSON 文件是否存在、可解析、内容非空
+// isValidOutputFile 根据文件扩展名选择验证策略（JSON 做解析验证，其他只检查非空），用于断点续存
+// atomicWriteFileSync 先写 .tmp 再 rename，避免中断产生半截文件
 // formatPathTemplate 将路径模板中的 {key} / {key:04d} 占位符替换为实际值
 import {
   deepGet,
   safeGetCostInfo,
   createZeroCostInfo,
   formatErrorContext,
-  isValidJsonFile,
+  isValidOutputFile,
+  atomicWriteFileSync,
   formatPathTemplate,
 } from "./utils.js";
 
@@ -116,6 +118,8 @@ export interface ActionConfig {
   temperature?: number;
   /** 最大 token 数（仅 llm_call 类型使用） */
   max_tokens?: number;
+  /** API 调用超时时间秒数（仅 llm_call 类型使用） */
+  timeout?: number;
   /** 文件编码（仅 read_file 类型使用） */
   encoding?: string;
   /** 文件不存在时是否容忍（仅 read_file 类型使用） */
@@ -180,6 +184,7 @@ function _createActionFromConfig(
       config.validate_json ?? false,        // 是否验证 JSON 格式
       config.temperature,                   // 温度参数（可选）
       config.max_tokens,                    // 最大 token 数（可选）
+      config.timeout as number | undefined, // API 超时时间（可选）
       config.required_fields,               // JSON 必填字段列表（可选）
       config.json_rules,                    // JSON 验证规则（可选）
       config.json_retry_max_attempts ?? 3,  // JSON 重试最大次数
@@ -358,6 +363,11 @@ export class ConcurrentAction extends BaseAction {
     // ============================================================
     // 例如 itemsKey = "pages"，则 items = context.data["pages"]
     // 如果键不存在或值不是数组，抛出明确的错误
+    // 批次计时起点，用于在处理结束时计算总耗时
+    const batchStart = Date.now();
+    // 获取结构化日志记录器（同时写 .log 和 .jsonl），可能为 null
+    const slog = context.workflowLogger;
+
     const rawItems = context.data[this.itemsKey];
     if (!Array.isArray(rawItems)) {
       throw new Error(
@@ -420,6 +430,22 @@ export class ConcurrentAction extends BaseAction {
       tuple: [unknown, number]
     ): Promise<["success" | "skipped" | "fatal_error", unknown]> => {
       const [item, index] = tuple;
+      // 任务计时起点
+      const taskStart = Date.now();
+
+      // 生成简洁的任务标签（文件路径取文件名、长字符串截断等）
+      let _label: string;
+      if (typeof item === "string") {
+        // 文件路径只取文件名部分
+        const parts = item.replace(/\\/g, "/").split("/");
+        _label = parts[parts.length - 1] || item.slice(0, 60);
+      } else if (item !== null && typeof item === "object") {
+        _label = JSON.stringify(item).slice(0, 60);
+      } else {
+        _label = String(item).slice(0, 60);
+      }
+
+      logger.info(`[步骤${this.stepId}] 开始处理 [${index + 1}/${items.length}] ${_label}`);
 
       // ----- 断点续存检查 -----
       // 如果配置了 saveToFile，检查输出文件是否已经存在且有效
@@ -440,11 +466,24 @@ export class ConcurrentAction extends BaseAction {
           );
           const outputPath = path.join(outputDir, filename);
 
-          // isValidJsonFile 检查文件是否存在、可解析、内容非空
-          if (isValidJsonFile(outputPath)) {
+          // isValidOutputFile 根据扩展名选择验证策略：
+          //   .json → 解析验证（防止半截 JSON）
+          //   .txt 等 → 只检查存在且非空（需配合原子写入保证完整性）
+          if (isValidOutputFile(outputPath)) {
             logger.debug(
               `[步骤${this.stepId}] 跳过已处理项目 ${index}: ${outputPath}`
             );
+            // 结构化日志：记录跳过事件，方便排查断点续存行为
+            if (slog) {
+              slog.logEvent("concurrent_task_skip", {
+                step_id: this.stepId,
+                index: index + 1,
+                total: items.length,
+                item: _label,
+                reason: "file_exists_and_valid",
+                file: outputPath,
+              }, "INFO");
+            }
             return ["skipped", null];
           }
         } catch {
@@ -469,13 +508,24 @@ export class ConcurrentAction extends BaseAction {
       // ----- 依次执行子步骤 -----
       // processSteps 通常只有一个（如一次 LLM 调用），但支持多个串行子步骤
       // 每个子步骤的输出会合并进 childContext.data，供下一个子步骤使用
-      for (const stepConfig of this.processSteps) {
+      for (let stepIdx = 0; stepIdx < this.processSteps.length; stepIdx++) {
+        // 非空断言（!）：stepIdx 由 for 循环保证在 [0, length) 范围内
+        const stepConfig = this.processSteps[stepIdx]!;
+        const stepType = stepConfig.type ?? "unknown";
+        const stepStart = Date.now();
+
         // 用工厂函数根据配置创建 Action 实例
         const action = _createActionFromConfig(stepConfig, this.workflowDir);
 
         try {
           // action.run() 是 BaseAction 的模板方法：计时 → execute() → 注入元数据
           const result = await action.run(childContext);
+
+          // 子步骤耗时日志（debug 级别，不干扰正常输出）
+          const stepElapsed = ((Date.now() - stepStart) / 1000).toFixed(1);
+          logger.debug(
+            `[步骤${this.stepId}] [${index + 1}] 子步骤${stepIdx + 1}(${stepType}) 完成 耗时${stepElapsed}s`
+          );
 
           // 将子步骤结果合并进子上下文，供后续子步骤或文件保存使用
           Object.assign(childContext.data, result.data);
@@ -504,8 +554,24 @@ export class ConcurrentAction extends BaseAction {
           }
 
           // 格式化错误上下文，生成可读的日志消息
+          const elapsed = ((Date.now() - taskStart) / 1000).toFixed(1);
           const errMsg = formatErrorContext(e, item, stepConfig as Record<string, unknown>, index);
-          logger.error(`[步骤${this.stepId}] ${errMsg}`);
+          logger.error(
+            `[步骤${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
+            `失败(耗时${elapsed}s): ${errMsg}`
+          );
+          // 结构化日志：记录失败事件
+          if (slog) {
+            slog.logEvent("concurrent_task_fail", {
+              step_id: this.stepId,
+              index: index + 1,
+              total: items.length,
+              item: _label,
+              error: errMsg.slice(0, 300),
+              error_type: e instanceof Error ? e.constructor.name : "Error",
+              duration: parseFloat(elapsed),
+            }, "ERROR");
+          }
 
           // 返回 fatal_error，concurrentProcess 会记录到 stats 中
           return ["fatal_error", errMsg];
@@ -535,27 +601,71 @@ export class ConcurrentAction extends BaseAction {
           );
           const outputPath = path.join(outputDir, filename);
 
-          // 确保文件所在的目录存在
-          fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-          // JSON.stringify 的第三个参数 2 表示用 2 空格缩进，生成人类可读的格式
-          fs.writeFileSync(
-            outputPath,
-            JSON.stringify(dataToSave, null, 2),
-            "utf-8"
+          // 原子写入：先写 .tmp 再 rename，避免中断产生半截文件
+          // 这对非 JSON 文件尤其重要——断点续存时只检查"存在且非空"，
+          // 如果没有原子写入，半截的 .txt 文件会被误判为有效
+          const content = typeof dataToSave === "string"
+            ? dataToSave
+            : JSON.stringify(dataToSave, null, 2);
+          atomicWriteFileSync(outputPath, content);
+
+          // 保存成功：记录耗时和输出文件名
+          const elapsed = ((Date.now() - taskStart) / 1000).toFixed(1);
+          logger.info(
+            `[步骤${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
+            `完成 → ${path.basename(outputPath)} 耗时${elapsed}s`
           );
-          logger.debug(
-            `[步骤${this.stepId}] 已保存: ${outputPath}`
-          );
+          if (slog) {
+            slog.logEvent("concurrent_task_done", {
+              step_id: this.stepId,
+              index: index + 1,
+              total: items.length,
+              item: _label,
+              output_file: outputPath,
+              duration: parseFloat(elapsed),
+            }, "INFO");
+          }
+
+          // 返回文件路径（成本已收集到 allCosts）
+          return ["success", { saved_file: outputPath, item: String(item) }];
         } catch (e) {
-          // 文件保存失败不中断整体流程，只记录警告
-          logger.warn(
-            `[步骤${this.stepId}] 保存文件失败 (item ${index}): ${e}`
+          // 文件保存失败
+          const elapsed = ((Date.now() - taskStart) / 1000).toFixed(1);
+          const errMsg = formatErrorContext(e, item, undefined, index);
+          logger.error(
+            `[步骤${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
+            `保存文件失败(耗时${elapsed}s): ${errMsg}`
           );
+          if (slog) {
+            slog.logEvent("concurrent_task_fail", {
+              step_id: this.stepId,
+              index: index + 1,
+              total: items.length,
+              item: _label,
+              error: errMsg.slice(0, 300),
+              error_type: "save_file_error",
+              duration: parseFloat(elapsed),
+            }, "ERROR");
+          }
+          return ["fatal_error", errMsg];
         }
       }
 
-      // 处理成功，返回子上下文中的指定输出键的数据
-      // 如果 processSteps 的 output_key = "result"，则返回 childContext.data["result"]
+      // 没有配置 saveToFile 时，返回子上下文中的数据
+      const elapsed = ((Date.now() - taskStart) / 1000).toFixed(1);
+      logger.info(
+        `[步骤${this.stepId}] [${index + 1}/${items.length}] ${_label} 完成 耗时${elapsed}s`
+      );
+      if (slog) {
+        slog.logEvent("concurrent_task_done", {
+          step_id: this.stepId,
+          index: index + 1,
+          total: items.length,
+          item: _label,
+          duration: parseFloat(elapsed),
+        }, "INFO");
+      }
+
       // 取最后一个子步骤的 output_key 作为结果键名
       const lastStep = this.processSteps[this.processSteps.length - 1];
       const outputData = lastStep !== undefined
@@ -586,10 +696,47 @@ export class ConcurrentAction extends BaseAction {
       ? aggregateCosts(allCosts)
       : createZeroCostInfo();
 
+    const batchElapsed = ((Date.now() - batchStart) / 1000).toFixed(1);
     logger.info(
-      `[步骤${this.stepId}] 并发处理完成 — ` +
-      `成功: ${stats.success}, 失败: ${stats.failed}, 跳过: ${stats.skipped}`
+      `[步骤${this.stepId}] 并发处理完成: ` +
+      `成功 ${stats.success}, 失败 ${stats.failed}, 跳过 ${stats.skipped} ` +
+      `总耗时 ${batchElapsed}s`
     );
+
+    // 列出失败任务清单，方便快速定位问题
+    const failedItems = stats.items.filter(
+      (it) => it.status !== "success" && it.status !== "skipped"
+    );
+    if (failedItems.length > 0) {
+      logger.warn(
+        `[步骤${this.stepId}] 失败任务列表 (${failedItems.length}个):\n` +
+        failedItems.map((it) => {
+          const errText = it.result && typeof it.result === "object"
+            ? String((it.result as Record<string, unknown>)["error"] ?? "未知错误").slice(0, 120)
+            : "未知错误";
+          return `  - ${it.item}: ${errText}`;
+        }).join("\n")
+      );
+    }
+
+    // 写入 JSONL 批次汇总
+    if (slog) {
+      slog.logEvent("concurrent_batch_done", {
+        step_id: this.stepId,
+        total: stats.total,
+        success: stats.success,
+        failed: stats.failed,
+        skipped: stats.skipped,
+        duration: parseFloat(batchElapsed),
+        failed_items: failedItems.map((it) => ({
+          item: it.item,
+          error: (it.result && typeof it.result === "object"
+            ? String((it.result as Record<string, unknown>)["error"] ?? "")
+            : ""
+          ).slice(0, 200),
+        })),
+      }, failedItems.length > 0 ? "WARNING" : "INFO");
+    }
 
     // ============================================================
     // 第八步：failOnError 检查

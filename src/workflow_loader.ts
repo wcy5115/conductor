@@ -627,6 +627,7 @@ export class WorkflowLoader {
       config["validate_json"] as boolean | undefined,             // validateJson：是否验证 JSON
       config["temperature"] as number | undefined,                // temperature：温度参数
       config["max_tokens"] as number | undefined,                 // maxTokens：最大 token 数
+      config["timeout"] as number | undefined,                    // timeout：API 超时时间
       config["required_fields"] as string[] | undefined,          // requiredFields：必填字段列表
       config["json_rules"] as Record<string, unknown> | undefined, // jsonRules：JSON 验证规则
       (config["json_retry_max_attempts"] as number) ?? 3,         // jsonRetryMaxAttempts：重试次数

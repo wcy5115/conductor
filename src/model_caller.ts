@@ -31,7 +31,7 @@ import * as yaml from "js-yaml";
 import { fileURLToPath } from "url";
 // chat 是 llm_client.ts 提供的简化调用接口，接收 prompt 和连接参数，返回 LlmResult
 // LlmResult 包含 content（AI 回复文本）和 usage（token 用量）
-import { chat, LlmResult } from "./llm_client.js";
+import { chat, LlmResult, LlmCallOptions } from "./llm_client.js";
 
 /**
  * 简易日志器（与 llm_client.ts 相同的设计理由：保持依赖最小化）
@@ -415,7 +415,8 @@ export async function callModel(
   modelAlias: string,
   prompt: string,
   temperature?: number,
-  maxTokens?: number
+  maxTokens?: number,
+  timeout?: number
 ): Promise<LlmResult> {
   // 第一步：查找模型配置
   const entry = MODEL_MAPPINGS[modelAlias];
@@ -467,12 +468,18 @@ export async function callModel(
 
   // 第六步：调用 llm_client.chat() 发起请求
   // chat() 内部会调用 callLlmApi()，成功返回 LlmResult，失败抛出异常
-  return chat(prompt, config.api_url, config.api_key, config.model_name, {
+  // 构建 chat 调用参数
+  // timeout 只在调用方显式传入时才覆盖，否则使用 llm_client 的默认值（300秒）
+  const chatOptions: LlmCallOptions = {
     temperature: finalTemperature,
     max_tokens: finalMaxTokens,
     extra_headers: extraHeaders,
     extra_params: extraParams,
-  });
+  };
+  if (timeout !== undefined) {
+    chatOptions.timeout = timeout;
+  }
+  return chat(prompt, config.api_url, config.api_key, config.model_name, chatOptions);
 }
 
 // ============================================================

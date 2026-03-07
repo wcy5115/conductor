@@ -42,7 +42,7 @@ import { callModel, MODEL_MAPPINGS } from "../model_caller.js";
 // callLlmApi 是 llm_client.ts 提供的底层 API 调用函数，支持多模态消息
 // Message 是单条聊天消息的类型定义（role + content）
 // LlmResult 是 API 调用成功时的返回值类型（content + usage）
-import { callLlmApi, Message, LlmResult } from "../llm_client.js";
+import { callLlmApi, Message, LlmResult, LlmCallOptions } from "../llm_client.js";
 // calculateCost 根据模型名和 token 用量计算费用
 // CostResult 是成本计算结果类型（包含 input_cost、output_cost、total_cost 等字段）
 import { calculateCost, CostResult } from "../cost_calculator.js";
@@ -169,6 +169,8 @@ export class LLMCallAction extends BaseAction {
   readonly temperature?: number;
   /** 最大输出 token 数，限制模型响应长度 */
   readonly maxTokens?: number;
+  /** API 调用超时时间（秒），覆盖 llm_client 的默认值（300秒），适用于长耗时任务 */
+  readonly timeout?: number;
   /**
    * 是否启用 JSON 验证
    * 必须显式传入 true/false，不允许省略（防止用户忘记配置而导致意外行为）
@@ -232,6 +234,7 @@ export class LLMCallAction extends BaseAction {
    * @param validateJson        是否启用 JSON 验证（必须显式传入，不可省略）
    * @param temperature         温度参数（可选）
    * @param maxTokens           最大输出 token 数（可选）
+   * @param timeout             API 超时时间秒数（可选，覆盖默认 300 秒）
    * @param requiredFields      必需字段列表（可选）
    * @param jsonRules           JSON 验证规则（可选）
    * @param jsonRetryMaxAttempts JSON 验证重试次数，默认 3
@@ -247,6 +250,7 @@ export class LLMCallAction extends BaseAction {
     validateJson: boolean | undefined = undefined,
     temperature?: number,
     maxTokens?: number,
+    timeout?: number,
     requiredFields?: string[],
     jsonRules?: Record<string, unknown>,
     jsonRetryMaxAttempts = 3,
@@ -275,6 +279,7 @@ export class LLMCallAction extends BaseAction {
     this.validateJson = validateJson;
     this.temperature = temperature;
     this.maxTokens = maxTokens;
+    this.timeout = timeout;
     this.requiredFields = requiredFields;
     // ?? 空值合并：jsonRules 为 null/undefined 时使用空对象
     this.jsonRules = jsonRules ?? {};
@@ -425,11 +430,16 @@ export class LLMCallAction extends BaseAction {
         // callLlmApi 返回 [status, result] 元组：
         //   status === "success" → result 是 LlmResult（包含 content 和 usage）
         //   status !== "success" → result 是错误信息对象
-        const [status, result] = await callLlmApi(messages, modelConfig.api_url, modelConfig.api_key, modelConfig.model_name, {
+        // 构建 API 调用选项，timeout 仅在显式配置时传入
+        const callOptions: LlmCallOptions = {
           temperature: this.temperature ?? modelConfig.temperature ?? 0.7,
           max_tokens: this.maxTokens ?? modelConfig.max_tokens ?? 4000,
           extra_params: modelConfig.extra_params ?? {},
-        });
+        };
+        if (this.timeout !== undefined) {
+          callOptions.timeout = this.timeout;
+        }
+        const [status, result] = await callLlmApi(messages, modelConfig.api_url, modelConfig.api_key, modelConfig.model_name, callOptions);
 
         if (status !== "success") {
           // API 调用失败（如认证错误、模型不存在等）
@@ -480,7 +490,7 @@ export class LLMCallAction extends BaseAction {
         }
 
         // callModel 是简化调用接口：传入模型简称 + prompt，内部自动查找 API 配置
-        const result = await callModel(this.model, prompt, this.temperature, this.maxTokens);
+        const result = await callModel(this.model, prompt, this.temperature, this.maxTokens, this.timeout);
         resultContent = result.content;
         resultUsage = result.usage;
       }
@@ -815,7 +825,7 @@ export class ConditionalLLMAction extends LLMCallAction {
     // validateJson 传 false（默认不验证，行为与重构前一致）
     // 其余参数使用默认值：temperature/maxTokens/requiredFields/jsonRules 均为 undefined
     // jsonRetryMaxAttempts = 3, jsonRetryEnhancePrompt = false
-    super(model, promptTemplate, outputKey, "END", false, undefined, undefined, undefined, undefined, 3, false, config);
+    super(model, promptTemplate, outputKey, "END", false, undefined, undefined, undefined, undefined, undefined, 3, false, config);
     this.conditionFunc = conditionFunc;
   }
 

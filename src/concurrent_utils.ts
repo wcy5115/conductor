@@ -80,6 +80,62 @@ export interface ProcessStats {
 }
 
 // ============================================================
+// 辅助函数
+// ============================================================
+
+/**
+ * 生成简洁的任务标签，用于日志输出
+ *
+ * 根据 item 的类型智能提取可读标签：
+ *   - 元组 [index, realItem]：解包后取 realItem 部分（ConcurrentAction 传入的格式）
+ *   - 文件路径字符串：只显示文件名（去掉目录前缀）
+ *   - 长字符串：截断到 60 字符
+ *   - 字典对象：显示前 3 个 key
+ *   - 其他类型：转字符串后截断
+ *
+ * @param item 原始任务项
+ * @returns 适合放在日志中的简短标签
+ *
+ * 使用示例：
+ *   formatItemLabel(["page_001.png", 0])  → "page_001.png"
+ *   formatItemLabel("/data/output/page_001.json")  → "page_001.json"
+ *   formatItemLabel({ text: "...", index: 1, lang: "zh" })  → "{text, index, lang}"
+ */
+export function formatItemLabel(item: unknown): string {
+  // 第一步：如果是 [realItem, index] 元组（ConcurrentAction 传入的格式），解包取 realItem
+  // Array.isArray 检查是否是数组，length === 2 确认是二元组
+  let realItem = item;
+  if (Array.isArray(item) && item.length === 2) {
+    realItem = item[0];
+  }
+
+  // 第二步：根据类型生成标签
+  if (typeof realItem === "string") {
+    // 如果字符串包含路径分隔符，说明是文件路径，只取文件名部分
+    // 同时兼容 / 和 \ 两种分隔符（Linux / Windows）
+    if (realItem.includes("/") || realItem.includes("\\")) {
+      // 取最后一个分隔符之后的部分
+      const parts = realItem.replace(/\\/g, "/").split("/");
+      return parts[parts.length - 1] || realItem.slice(0, 60);
+    }
+    // 普通字符串：截断到 60 字符
+    return realItem.length > 60 ? realItem.slice(0, 60) + "..." : realItem;
+  }
+
+  if (realItem !== null && typeof realItem === "object" && !Array.isArray(realItem)) {
+    // 字典对象：显示前 3 个 key，超过 3 个时加 "+N" 后缀
+    const keys = Object.keys(realItem as Record<string, unknown>).slice(0, 3);
+    const extra = Object.keys(realItem as Record<string, unknown>).length - 3;
+    const suffix = extra > 0 ? ` +${extra}` : "";
+    return `{${keys.join(", ")}${suffix}}`;
+  }
+
+  // 其他类型：转字符串后截断
+  const s = String(realItem);
+  return s.length > 60 ? s.slice(0, 60) + "..." : s;
+}
+
+// ============================================================
 // 核心函数：concurrentProcess
 // ============================================================
 
@@ -277,6 +333,32 @@ export async function concurrentProcess<T>(
           // 成功/跳过时保留原始结果；失败时统一包装为 { error: string } 格式
           result: status === "success" || status === "skipped" ? result : { error: String(result) },
         });
+
+        // ---- 逐任务日志：成功/失败/跳过都记录 ----
+        // 生成简洁的任务标签（文件名、截断字符串、字典 key 列表等）
+        const itemLabel = formatItemLabel(item);
+        const idx = stats.success + stats.failed + stats.skipped; // 即将 +1
+        if (status === "success") {
+          console.info(`✓ [${idx + 1}/${total}] ${itemLabel} 成功`);
+        } else if (status === "skipped") {
+          // 跳过时尝试提取原因（ConcurrentAction 会在 result 中附带 reason 字段）
+          let reason = "";
+          if (result !== null && typeof result === "object" && !Array.isArray(result)) {
+            reason = String((result as Record<string, unknown>)["reason"] ?? "");
+          }
+          console.info(`⏭ [${idx + 1}/${total}] ${itemLabel} 跳过${reason ? ` (${reason})` : ""}`);
+        } else {
+          // retriable_error 或 fatal_error
+          let errorBrief = "";
+          if (result !== null && typeof result === "object" && !Array.isArray(result)) {
+            errorBrief = String((result as Record<string, unknown>)["error"] ?? "");
+          } else if (typeof result === "string") {
+            errorBrief = result;
+          }
+          // 截断过长的错误信息，避免日志刷屏
+          if (errorBrief.length > 150) errorBrief = errorBrief.slice(0, 150) + "...";
+          console.error(`✗ [${idx + 1}/${total}] ${itemLabel} 失败: ${errorBrief}`);
+        }
 
         // 根据状态更新对应的计数器，并通知熔断器
         if (status === "success") {
