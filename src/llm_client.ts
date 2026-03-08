@@ -206,18 +206,29 @@ export async function callLlmApi(
   model: string,
   options: LlmCallOptions = {}
 ): Promise<[LlmStatus, LlmResult | Record<string, unknown>]> {
-  // 解构赋值提取可选参数，提供默认值
-  // 等号右侧是默认值，只在调用方未传该参数时生效
+  // 从 options 对象中解构出各个参数，并为每个参数设置默认值
+  //
+  // 语法说明：const { key = 默认值 } = 对象
+  //   - 如果对象中有 key 属性且值不是 undefined → 使用传入的值
+  //   - 如果对象中没有 key 属性，或值为 undefined → 使用等号右边的默认值
+  //
+  // 示例：假设调用方传入 options = { temperature: 0.3 }
+  //   temperature = 0.3    ← 调用方传了，用传入的值
+  //   max_tokens  = 2000   ← 调用方没传，用默认值 2000
+  //   timeout     = 300    ← 调用方没传，用默认值 300
+  //   ...以此类推
   const {
-    temperature = 0.7,
-    max_tokens = 2000,
-    timeout = 300,
-    max_retries = 3,
-    // retry_delay 默认从环境变量 NETWORK_RETRY_DELAY 读取，若未设置则为 5 秒
-    // parseFloat 将字符串转为浮点数（环境变量都是字符串）
+    temperature = 0.7,      // 生成随机性，0=确定性最高，1=最随机，默认 0.7
+    max_tokens = 50000,     // 最大输出 token 数，默认 50000
+    timeout = 300,          // 请求超时秒数，默认 300 秒（5 分钟）
+    max_retries = 3,        // 失败后最多重试次数，默认 3 次
+    // retry_delay：两次重试之间等待的秒数
+    // 优先从环境变量 NETWORK_RETRY_DELAY 读取（方便运维调整，不改代码）
+    // ?? "5" 表示环境变量未设置时用字符串 "5"
+    // parseFloat 将字符串转为数字（环境变量都是字符串类型）
     retry_delay = parseFloat(process.env["NETWORK_RETRY_DELAY"] ?? "5"),
-    extra_headers,
-    extra_params,
+    extra_headers,          // 额外的 HTTP 请求头（可选，无默认值，不传则为 undefined）
+    extra_params,           // 额外的 API 参数（可选，无默认值，不传则为 undefined）
   } = options;
 
   // 第一步：预处理消息——将本地图片路径转换为 Base64 Data URL
@@ -227,13 +238,11 @@ export async function callLlmApi(
   // attempt 从 0 开始计数，最多尝试 max_retries 次
   for (let attempt = 0; attempt < max_retries; attempt++) {
     try {
-      // ⭐ 密钥熔断机制：如果安全检查未通过，替换为无效密钥
-      // 这样做而不是直接 return 错误，是为了让 API 返回认证失败的标准错误
-      // 方便上层统一处理错误格式
-      let actualApiKey = apiKey;
+      // ⭐ 密钥熔断机制：如果安全检查未通过，直接返回错误，不发起网络请求
+      // 返回 "fatal" 状态，表示不可重试的致命错误，上层会停止调用
       if (!isLlmEnabled()) {
-        logger.warning("🔒 [SAFETY] LLM 调用已冻结，使用无效密钥");
-        actualApiKey = "sk-INVALID-SAFETY-FREEZE-ENABLED";
+        logger.warning("🔒 [SAFETY] LLM 调用已冻结，跳过 API 请求");
+        return ["fatal", { error: "LLM 调用已冻结（LLM_API_ENABLE 未启用）" }];
       }
 
       // 第三步：构建 OpenAI Chat Completions 格式的请求体
@@ -254,7 +263,7 @@ export async function callLlmApi(
       // 构建 HTTP 请求头
       // Authorization: Bearer <key> 是 OpenAI 兼容 API 的标准认证方式
       const headers: Record<string, string> = {
-        Authorization: `Bearer ${actualApiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       };
 

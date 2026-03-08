@@ -18,7 +18,7 @@
 
 // getModelPricingInfo：从 model_caller.ts 获取模型的价格配置（输入/输出单价）
 // 返回 { input, output, currency } 或 null（模型不存在或未配置价格时）
-import { getModelPricingInfo } from "./model_caller";
+import { getModelPricingInfo } from "./model_caller.js";
 
 // 暂用 console 作为日志占位，待 core/logging.ts 迁移后替换
 const logger = {
