@@ -79,14 +79,15 @@ const logger = {
  * 不使用真正的 tokenizer（如 tiktoken），而是用简单的启发式规则估算 token 数：
  *   - 中文字符（\u4e00-\u9fff）：每个字符计 1 个 token
  *   - 英文单词（\b[a-zA-Z]+\b）：每个单词计 2 个 token
+ *   - 其余字符（标点/空格/数字/符号）：每个计 1 个 token
  *
  * 这个估算方式粗略但速度快，适合用于文本切分时的大致控制。
  * 实际 token 数取决于具体模型的 tokenizer，但对于切分来说够用了。
  *
  * 示例：
  *   calculateTokens("你好世界")        → 4（4 个中文字符 × 1）
- *   calculateTokens("hello world")    → 4（2 个英文单词 × 2）
- *   calculateTokens("你好 hello")     → 4（2 个中文字符 × 1 + 1 个英文单词 × 2）
+ *   calculateTokens("hello world")    → 5（2 个英文单词 × 2 + 1 个空格 × 1）
+ *   calculateTokens("你好 hello")     → 5（2 个中文字符 × 1 + 1 个空格 × 1 + 1 个英文单词 × 2）
  *   calculateTokens("")               → 0
  *
  * @param text 要估算的文本
@@ -101,9 +102,16 @@ function calculateTokens(text: string): number {
 
   // 正则 \b[a-zA-Z]+\b 匹配由英文字母组成的完整单词
   // \b 是单词边界锚点，确保匹配完整单词而非部分子串
-  const englishWords = (text.match(/\b[a-zA-Z]+\b/gu) || []).length;
+  const englishWords = text.match(/\b[a-zA-Z]+\b/gu) || [];
+  // 英文单词占据的字符总数（用于计算"其余字符"数量）
+  const englishWordChars = englishWords.reduce((sum, w) => sum + w.length, 0);
+  // 英文单词的 token 数：每个单词计 2 个 token
+  const englishWordTokens = englishWords.length * 2;
+  // 其余字符：总长度 - 中文字符数 - 英文字母字符数
+  // 包括标点、空格、数字、符号等，每个计 1 个 token
+  const otherChars = text.length - chineseChars - englishWordChars;
 
-  return chineseChars + englishWords * 2;
+  return chineseChars + englishWordTokens + otherChars;
 }
 
 /**
