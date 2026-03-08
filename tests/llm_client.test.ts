@@ -527,30 +527,27 @@ describe("callLlmApi", () => {
   // 安全熔断测试
   // ============================================================
 
-  it("LLM_API_ENABLE 未设置时：使用无效密钥发送请求", async () => {
-    // 删除环境变量 → isLlmEnabled() 返回 false
+  it("LLM_API_ENABLE 未设置时：直接返回 fatal_error，不发送请求", async () => {
+    // 删除环境变量 → isLlmEnabled() 返回 false → 熔断，不调用 fetch
     delete process.env.LLM_API_ENABLE;
 
-    mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("OK")));
+    const [content, usage] = await callLlmApi(testMessages, testUrl, testKey, testModel);
 
-    await callLlmApi(testMessages, testUrl, testKey, testModel);
-
-    // 验证发送的密钥被替换为无效密钥
-    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-    const headers = init.headers as Record<string, string>;
-    expect(headers["Authorization"]).toBe("Bearer sk-INVALID-SAFETY-FREEZE-ENABLED");
+    // 验证直接返回 fatal_error，不发送任何网络请求
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(content).toBe("fatal_error");
+    expect(usage.error).toMatch(/冻结/);
   });
 
-  it("LLM_API_ENABLE=false 时：使用无效密钥", async () => {
+  it("LLM_API_ENABLE=false 时：直接返回 fatal_error，不发送请求", async () => {
     process.env.LLM_API_ENABLE = "false";
 
-    mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("OK")));
+    const [content, usage] = await callLlmApi(testMessages, testUrl, testKey, testModel);
 
-    await callLlmApi(testMessages, testUrl, testKey, testModel);
-
-    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
-    const headers = init.headers as Record<string, string>;
-    expect(headers["Authorization"]).toContain("INVALID");
+    // 验证直接返回 fatal_error，不发送任何网络请求
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(content).toBe("fatal_error");
+    expect(usage.error).toMatch(/冻结/);
   });
 
   it("LLM_API_ENABLE=1 时：使用真实密钥", async () => {

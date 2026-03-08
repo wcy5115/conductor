@@ -242,7 +242,7 @@ export async function callLlmApi(
       // 返回 "fatal" 状态，表示不可重试的致命错误，上层会停止调用
       if (!isLlmEnabled()) {
         logger.warning("🔒 [SAFETY] LLM 调用已冻结，跳过 API 请求");
-        return ["fatal", { error: "LLM 调用已冻结（LLM_API_ENABLE 未启用）" }];
+        return ["fatal_error", { error: "LLM 调用已冻结（LLM_API_ENABLE 未启用）" }];
       }
 
       // 第三步：构建 OpenAI Chat Completions 格式的请求体
