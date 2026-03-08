@@ -489,6 +489,27 @@ export async function callLlmApi(
           ];
         }
 
+        if (
+          msg.includes("chunked") ||
+          msg.includes("CHUNKED") ||
+          msg.includes("incomplete") ||
+          msg.includes("truncated")
+        ) {
+          // 分块传输错误：HTTP chunked transfer encoding 数据不完整
+          // 对应 Python 版 requests.exceptions.ChunkedEncodingError
+          // 常见原因：服务器在传输响应体时中断连接（网络抖动、服务端超时等）
+          // 可重试：通常是暂时性的网络问题
+          logger.warning(`分块传输错误（尝试 ${attempt + 1}/${max_retries}）: ${msg}`);
+          if (attempt < max_retries - 1) {
+            await sleep(retry_delay);
+            continue;
+          }
+          return [
+            "retriable_error",
+            { error: `数据传输中断: ${msg}`, error_type: "chunked_encoding_error" },
+          ];
+        }
+
         // 通用网络错误（DNS 解析失败、连接拒绝、网络不可达等）
         // 可重试：网络问题通常是暂时性的
         if (attempt < max_retries - 1) {

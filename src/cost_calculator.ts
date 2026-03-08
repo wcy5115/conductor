@@ -16,6 +16,10 @@
  *   例如：输入 500 tokens，单价 20 元/百万 → (500 / 1_000_000) × 20 = ¥0.01
  */
 
+// getModelPricingInfo：从 model_caller.ts 获取模型的价格配置（输入/输出单价）
+// 返回 { input, output, currency } 或 null（模型不存在或未配置价格时）
+import { getModelPricingInfo } from "./model_caller";
+
 // 暂用 console 作为日志占位，待 core/logging.ts 迁移后替换
 const logger = {
   info: (msg: string) => console.info(msg),
@@ -108,10 +112,9 @@ export function calculateCost(
   totalTokens: number,
 ): CostResult {
   // 第一步：获取模型的定价信息
-  // TODO: 待 model_caller.ts 迁移后，替换为 getModelPricingInfo(model)
-  // 强制为联合类型 PricingInfo | null，防止 TS 将字面量 null 收窄为 never 类型
-  // 如果不加类型断言，TS 会认为 pricing 永远是 null，从而将下方 if (!pricing) 之后的代码标记为不可达
-  const pricing = null as PricingInfo | null;
+  // 从 model_caller.ts 的 MODEL_MAPPINGS 中查找模型的价格配置
+  // 返回 { input, output, currency } 或 null（模型不存在或未配置价格时）
+  const pricing = getModelPricingInfo(model);
 
   // 模型未配置价格 → 返回零成本，但仍记录 token 用量
   if (!pricing) {
@@ -313,10 +316,9 @@ export function addModelPricing(
   _currency = "CNY",
 ): void {
   logger.warn(
-    `addModelPricing() 已废弃，请在 model_caller.ts 的 MODEL_MAPPINGS 中配置价格。` +
+    `addModelPricing() 已废弃，请在 models.yaml 中配置价格，由 model_caller.ts 统一加载。` +
       `尝试为模型 '${model}' 添加价格: 输入¥${inputPrice}/M, 输出¥${outputPrice}/M`,
   );
-  // TODO: 待 model_caller.ts 迁移后，调用 addCustomModel()
 }
 
 /**
@@ -324,7 +326,7 @@ export function addModelPricing(
  *
  * @deprecated 已废弃。请直接使用 model_caller.ts 的 getModelPricingInfo()。
  */
-export function getModelPricing(_model: string): PricingInfo | null {
-  // TODO: 待 model_caller.ts 迁移后，替换为 getModelPricingInfo(model)
-  return null;
+export function getModelPricing(model: string): PricingInfo | null {
+  // 委托给 model_caller.ts 的 getModelPricingInfo
+  return getModelPricingInfo(model);
 }
