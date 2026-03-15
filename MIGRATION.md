@@ -198,6 +198,40 @@ steps:
 
 ---
 
+### MCP Server 支持 ⏳
+
+将 conductor 包装为 MCP Server，每个 YAML workflow 自动注册为一个 MCP tool。
+
+- 新增 `src/mcp_server.ts` 入口文件，依赖 `@modelcontextprotocol/sdk`
+- 启动时扫描 `workflows/` 目录，每个 YAML 注册为一个 tool
+- YAML 中新增 `inputs` 字段声明 tool 参数（输入 epub 路径、语言等）
+- 现有的 workflow_parser、workflow_engine、workflow_runner 无需改动
+- 支持 stdio 和 HTTP 两种传输方式
+- 任何支持 MCP 的客户端（Claude Code、未来的 Flutter app 等）均可直接调用翻译流水线
+
+---
+
+### 自然语言生成 YAML workflow ⏳
+
+让不懂编程的用户通过自然语言描述需求，自动生成并执行工作流。
+
+- 用户输入自然语言 → LLM 生成 workflow YAML → conductor 执行
+- 自动校验层：检查 YAML 语法、action type 合法性、必填参数、步骤编号一致性
+- 先用 mock 模型（`models.mock.yaml`）验证工作流逻辑，零成本确认流程无误后再换真模型执行
+- 校验失败时将错误信息反馈给 LLM 自动修正
+
+---
+
+### Flutter 移动端 AI App ⏳
+
+自用 AI 聊天客户端（参考 Chatbox），通过 MCP 协议调用 conductor。
+
+- 支持多模型（Claude / GPT / DeepSeek / Ollama）
+- Markdown + LaTeX 公式渲染
+- 可通过 MCP 协议远程调用 conductor 的翻译工作流
+
+---
+
 ### 库化导出入口 ⏳
 
 当前 `src/index.ts` 只有 `console.log("conductor")`，需改为统一 re-export：

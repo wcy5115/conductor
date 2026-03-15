@@ -173,6 +173,12 @@ export class WorkflowGraph {
       for (const toStep of toSteps) allNodes.add(toStep);
     }
 
+    // 特殊情况：图中没有任何边（单步骤分支，如 "2"）
+    // 此时 startNode 本身就是唯一的节点，既是起点也是终点
+    // 如果不处理这种情况，下面的 filter 会得到空数组，
+    // 兜底返回 ["END"]，导致后续连接逻辑误认为"分支已结束"而跳过连边
+    if (allNodes.size === 0) return [this.startNode];
+
     // 第二步：过滤出终点节点
     // 条件 1：不是 "END"（END 是流程结束标记，不算业务步骤）
     // 条件 2：出度为 0（getNextSteps 返回空数组，即没有下一步）
