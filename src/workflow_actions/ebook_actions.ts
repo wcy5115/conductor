@@ -532,11 +532,13 @@ export class MergeToEpubAction extends BaseAction {
     }
 
     const successCount = (alignedResult["success"] as number) || 0;
-    if (successCount === 0) {
+    const skippedCount = (alignedResult["skipped"] as number) || 0;
+    const availableCount = successCount + skippedCount;
+    if (availableCount === 0) {
       throw new Error("步骤3没有成功的对齐结果");
     }
 
-    logger.info(`开始生成ePub... (成功对齐 ${successCount} 个块)`);
+    logger.info(`开始生成ePub... (对齐结果 ${availableCount} 个块: 成功 ${successCount}, 续传跳过 ${skippedCount})`);
 
     // 第二步：从文件系统读取所有对齐文件
     const alignedDirResolved = replaceContextVars(this.alignedDir);
