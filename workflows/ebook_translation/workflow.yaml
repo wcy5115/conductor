@@ -1,9 +1,9 @@
 # 电子书翻译工作流
-# 从ePub提取文本 → 并发翻译 → 句子级对齐 → 生成中英对照ePub
+# 从ePub/TXT提取文本 → 并发翻译 → 句子级对齐 → 生成中英对照ePub
 
 project_name: "ebook_translation"
 name: "电子书翻译流水线"
-description: "用LLM_agent框架实现电子书翻译，保留原E_book_translation项目的提示词逻辑"
+description: "用LLM_agent框架实现电子书翻译（支持ePub/TXT），保留原E_book_translation项目的提示词逻辑"
 
 # 路径配置
 paths:
@@ -52,7 +52,7 @@ steps:
       - type: "llm_call"
         model: "deepseek-V3.2-nonthinking"
         temperature: 0.3
-        max_tokens: 4000
+        max_tokens: 8000
         validate_json: true  # 验证并解析 JSON 格式
         required_fields: ["translated_text"]  # 检查字段存在且非空
 

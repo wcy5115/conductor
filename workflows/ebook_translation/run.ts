@@ -24,7 +24,7 @@ import { WorkflowRunner } from "../../src/core/workflow_runner.js";
 // 配置区：按需修改
 // ============================================================
 
-// INPUT_EPUB：输入 ePub 文件的路径
+// INPUT_EPUB：输入电子书文件的路径（支持 .epub 和 .txt）
 const INPUT_EPUB = String.raw`C:\Users\wcy51\Downloads\example.epub`;
 
 // BOOK_NAME：书名，用于输出文件的命名（如 "浪潮之巅_translated.epub"）
@@ -34,11 +34,20 @@ const BOOK_NAME = "example_book";
 // 主函数
 // ============================================================
 
+const SUPPORTED_EXTENSIONS = new Set([".epub", ".txt"]);
+
 async function main(): Promise<void> {
   // 第一步：检查输入文件是否存在
   if (!fs.existsSync(INPUT_EPUB)) {
     console.error(`错误：找不到输入文件: ${INPUT_EPUB}`);
     console.error("请修改脚本中的 INPUT_EPUB 变量");
+    process.exit(1);
+  }
+
+  // 检查文件格式
+  const ext = path.extname(INPUT_EPUB).toLowerCase();
+  if (!SUPPORTED_EXTENSIONS.has(ext)) {
+    console.error(`错误：不支持的文件格式: ${ext}，支持: ${[...SUPPORTED_EXTENSIONS].join(", ")}`);
     process.exit(1);
   }
 

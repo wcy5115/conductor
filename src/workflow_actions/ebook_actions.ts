@@ -265,20 +265,23 @@ function splitBySentences(
 }
 
 // ============================================================
-// EpubExtractAction — 从 ePub 提取文本并按段落切分
+// EpubExtractAction — 从电子书（ePub/TXT）提取文本并按段落切分
 // ============================================================
 
 /**
- * 从 ePub 提取文本并按段落切分
+ * 从电子书（ePub/TXT）提取文本并按段落切分
+ *
+ * 支持格式：.epub, .txt
  *
  * 工作流程：
- *   1. 读取 ePub 文件（使用 epub 包解析 ZIP 内部结构）
- *   2. 遍历所有章节（flow），用 cheerio 从 HTML 中提取纯文本
- *   3. 合并所有章节文本
+ *   1. 根据文件扩展名选择提取方式（ePub 解析 / TXT 读取）
+ *   2. 对于 ePub：遍历所有章节（flow），用 cheerio 从 HTML 中提取纯文本
+ *      对于 TXT：自动检测编码（utf-8/utf-8-sig/gbk/gb18030）读取全文
+ *   3. 合并所有文本
  *   4. 使用 splitBySentences 智能切分为合适大小的块
  *   5. 输出带序号的文本块列表
  *
- * 输入：context.data[inputKey] — ePub 文件路径
+ * 输入：context.data[inputKey] — 电子书文件路径
  * 输出：context.data[outputKey] — 文本块列表，每个块是 { index: number, text: string }
  *
  * 示例输出：
@@ -288,7 +291,9 @@ function splitBySentences(
  *   ]
  */
 export class EpubExtractAction extends BaseAction {
-  // inputKey：从 context.data 中取 ePub 文件路径的键名
+  static readonly SUPPORTED_EXTENSIONS = new Set([".epub", ".txt"]);
+
+  // inputKey：从 context.data 中取电子书文件路径的键名
   private readonly inputKey: string;
   // outputKey：切分后的文本块列表存入 context.data 的键名
   private readonly outputKey: string;
@@ -299,7 +304,7 @@ export class EpubExtractAction extends BaseAction {
   // nextStep：执行完毕后跳转到的下一步 ID
   private readonly nextStep: string;
   // saveToFile：可选的断点续传配置
-  // 如果配置了该字段，提取后的文本块会保存到文件，下次运行时直接从文件恢复跳过 ePub 解析
+  // 如果配置了该字段，提取后的文本块会保存到文件，下次运行时直接从文件恢复跳过提取
   // 配置格式：{ output_dir: "data/{project}/original", filename_template: "chunk_{index:04d}.txt" }
   private readonly saveToFile?: { output_dir: string; filename_template?: string };
 
@@ -322,38 +327,99 @@ export class EpubExtractAction extends BaseAction {
     this.saveToFile = saveToFile;
   }
 
+  /**
+   * 从 ePub 提取全文
+   */
+  private async extractEpub(filePath: string): Promise<string> {
+    const epub = new EPub(filePath);
+    await epub.parse();
+
+    const allText: string[] = [];
+    for (const item of epub.flow) {
+      try {
+        const html = await epub.getChapter(item.id);
+        if (html) {
+          const $ = cheerio.load(html);
+          const text = $.text();
+          if (text.trim()) {
+            allText.push(text.trim());
+          }
+        }
+      } catch {
+        logger.warn(`跳过无法解析的章节: ${item.id}`);
+      }
+    }
+    return allText.join("\n\n");
+  }
+
+  /**
+   * 从 TXT 文件读取全文
+   *
+   * 尝试常见编码：utf-8, utf-8-sig(BOM), gbk, gb18030
+   * Node.js 原生只支持 utf-8，其他编码通过 TextDecoder 处理
+   */
+  private extractTxt(filePath: string): string {
+    const buffer = fs.readFileSync(filePath);
+
+    // 检测并去除 UTF-8 BOM
+    if (buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
+      logger.info("TXT 文件使用编码: utf-8-sig");
+      return buffer.subarray(3).toString("utf-8");
+    }
+
+    // 尝试 UTF-8
+    try {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+      logger.info("TXT 文件使用编码: utf-8");
+      return text;
+    } catch { /* 不是有效 UTF-8 */ }
+
+    // 尝试 GBK / GB18030
+    for (const encoding of ["gbk", "gb18030"] as const) {
+      try {
+        const text = new TextDecoder(encoding, { fatal: true }).decode(buffer);
+        logger.info(`TXT 文件使用编码: ${encoding}`);
+        return text;
+      } catch { /* 继续尝试 */ }
+    }
+
+    throw new Error("无法解码 TXT 文件，尝试过的编码: utf-8, utf-8-sig, gbk, gb18030");
+  }
+
   async execute(context: WorkflowContext): Promise<StepResult> {
-    // 第一步：从上下文获取 ePub 文件路径
-    const epubPath = context.data[this.inputKey] as string | undefined;
-    if (!epubPath) {
+    // 第一步：从上下文获取电子书文件路径
+    const filePath = context.data[this.inputKey] as string | undefined;
+    if (!filePath) {
       throw new Error(`缺少输入路径: ${this.inputKey}`);
     }
 
+    // 检查文件扩展名
+    const ext = path.extname(filePath).toLowerCase();
+    if (!EpubExtractAction.SUPPORTED_EXTENSIONS.has(ext)) {
+      throw new Error(
+        `不支持的文件格式: ${ext}，支持: ${[...EpubExtractAction.SUPPORTED_EXTENSIONS].join(", ")}`
+      );
+    }
+
     // ----- 断点续传：如果文本块文件已存在，直接从文件恢复 -----
-    // 当 saveToFile 配置了 output_dir 且目录中已有 chunk_*.txt 文件时，
-    // 说明之前的运行已经完成了 ePub 提取，无需重复解析（ePub 解析较慢）
     if (this.saveToFile) {
-      // 用 context.data 中的值替换路径模板中的占位符
-      // 例如 output_dir: "{paths.original}" → "data/mybook/original"
       let resolvedDir = this.saveToFile.output_dir;
       for (const [key, value] of Object.entries(context.data)) {
         resolvedDir = resolvedDir.replaceAll(`{${key}}`, String(value));
       }
       const outputDir = path.resolve(resolvedDir);
 
-      // 检查目录中是否已有 chunk_*.txt 文件
       if (fs.existsSync(outputDir)) {
         const existingFiles = fs.readdirSync(outputDir)
           .filter((f) => /^chunk_\d+\.txt$/.test(f))
           .sort();
 
         if (existingFiles.length > 0) {
-          // 从已有文件恢复文本块列表
           const chunkList = existingFiles.map((f, i) => ({
             index: i + 1,
             text: fs.readFileSync(path.join(outputDir, f), "utf-8"),
           }));
-          logger.info(`从已有文本块文件恢复 ${chunkList.length} 个块，跳过 epub 提取`);
+          logger.info(`从已有文本块文件恢复 ${chunkList.length} 个块，跳过提取`);
           return new StepResult(
             this.nextStep,
             { [this.outputKey]: chunkList },
@@ -363,40 +429,15 @@ export class EpubExtractAction extends BaseAction {
       }
     }
 
-    logger.info(`开始提取ePub: ${epubPath}`);
+    logger.info(`开始提取文本 (${ext}): ${filePath}`);
 
-    // 第二步：解析 ePub 文件
-    // epub 包的使用方式：new EPub(path) 创建实例 → await epub.parse() 解析元数据和目录
-    // 解析后 epub.flow 包含所有章节的清单项（ManifestItem），
-    // 每项有 id 和 media-type 等属性
-    const epub = new EPub(epubPath);
-    await epub.parse();
-
-    // 第三步：遍历所有章节，提取纯文本
-    // epub.flow 是按阅读顺序排列的章节列表（来自 spine）
-    // 对于每个章节：getChapter(id) 返回章节的 HTML 内容 → cheerio.load() 解析 → .text() 提取纯文本
-    const allText: string[] = [];
-    for (const item of epub.flow) {
-      try {
-        // getChapter 返回处理过的 HTML（已移除 script/style 标签）
-        const html = await epub.getChapter(item.id);
-        if (html) {
-          // cheerio.load(html) 等价于 BeautifulSoup(html, 'html.parser')
-          // $("*") 选择所有元素，.text() 提取其中的纯文本（去掉所有 HTML 标签）
-          const $ = cheerio.load(html);
-          const text = $.text();
-          if (text.trim()) {
-            allText.push(text.trim());
-          }
-        }
-      } catch {
-        // 某些非文本章节（如图片页）可能无法解析，跳过即可
-        logger.warn(`跳过无法解析的章节: ${item.id}`);
-      }
+    // 根据文件类型提取全文
+    let fullText: string;
+    if (ext === ".epub") {
+      fullText = await this.extractEpub(filePath);
+    } else {
+      fullText = this.extractTxt(filePath);
     }
-
-    // 第四步：合并所有章节文本，章节间用双换行分隔
-    const fullText = allText.join("\n\n");
 
     // 第五步：智能切分（句子级 + token 感知）
     const chunks = splitBySentences(
