@@ -10,10 +10,11 @@ paths:
   original: "artifacts/original"      # 原文文本块
   translated: "artifacts/translated"  # 翻译结果
   aligned: "artifacts/aligned"        # 对齐结果
+  polished: "artifacts/polished"      # 润色+词汇标注结果
   results: "results"                  # 最终成果
 
 # 工作流图：提取 -> 翻译 -> 对齐 -> 生成 -> 结束
-workflow_graph: "1 -> 2 -> 3 -> 4 -> END"
+workflow_graph: "1 -> 2 -> 3 -> 4 -> 5 -> END"
 
 steps:
   # ========================================
@@ -135,17 +136,83 @@ steps:
     # 输出：3_response (对齐结果统计)
 
   # ========================================
-  # 步骤4：合并生成ePub
+  # 步骤4：润色翻译 + 词汇标注
   # ========================================
   "4":
+    name: "润色与词汇标注"
+    type: "concurrent"
+    items_key: "1_response"  # 遍历原文文本块（用于索引）
+    max_concurrent: 10
+    task_dispatch_delay: 1.0
+
+    save_to_file:
+      output_dir: "{paths.polished}"
+      filename_template: "polished_{index:04d}.txt"
+      data_key: "polish_result.polished_text"
+
+    process_steps:
+      - type: "read_file"
+        path_template: "{paths.aligned}/aligned_{index:04d}.txt"
+        output_key: "aligned_text"
+
+      - type: "llm_call"
+        model: "deepseek-V3.2-nonthinking"
+        temperature: 0.3
+        max_tokens: 8000
+        validate_json: true
+        required_fields: ["polished_text"]
+
+        prompt: |
+          你是一位专业的英语学习材料编辑。你的任务是对一段中英对齐文本进行润色和词汇标注。
+
+          **你需要完成三项工作：**
+
+          ## 1. 校对翻译
+          - 逐句核对中文翻译与英文原文，修正任何遗漏、误译或不通顺之处
+          - 确保每句英文都有对应的中文翻译，不得遗漏
+          - 译文应准确、自然、流畅，符合中文表达习惯
+
+          ## 2. 调整顺序（严格执行）
+          - 每组对齐：中文在前，英文在后，绝对不允许英文出现在中文前面
+          - 同一句的中文和英文之间用一个空格分隔
+
+          ## 3. 生僻词汇标注
+          - 识别文中对于英语学习者来说生僻或有学习价值的词汇
+          - 在该词首次出现的那一句之后，紧跟词汇标注
+          - 格式：{{单词 [词根拆解及来源] 中文释义}}
+          - 词根拆解要说明每个词根/词缀的语言来源（如拉丁语、希腊语、古英语等）和含义
+          - 同一个单词在全文中只标注一次（首次出现时）
+          - 专有名词（人名、地名、机构名）不标注
+          - 复合词不标注，只标注单个生僻词
+
+          ## 输出格式要求
+          所有内容连成一整段，不换行不分段。词汇标注 {{}} 直接跟在对应句子后面。
+
+          ## 示例
+          2023年卸任新西兰总理后，杰辛达·阿德恩在哈佛大学任职。 After stepping down as New Zealand's prime minister in 2023, Jacinda Ardern took up a role at Harvard University. 阿德恩移居海外的决定触动了新西兰人的敏感神经——他们本就对大规模移民外流深感忧虑。 Ms Ardern's decision to live abroad has struck a nerve with Kiwis, who were already worried about high levels of emigration. {{emigration [e-(拉丁语 ex-，"向外") + migr-(拉丁语 migrare，"迁移") + -ation(名词后缀)] 移居国外，移民出境}} 政客们关注的是有多少人迁入本国。 Politicians focus on how many people migrate to their country.
+
+          **待处理文本**
+          {aligned_text}
+
+          **返回格式（纯JSON）**
+          {{{{
+            "polished_text": "处理后的完整文本"
+          }}}}
+
+        output_key: "polish_result"
+
+  # ========================================
+  # 步骤5：合并生成ePub
+  # ========================================
+  "5":
     name: "生成ePub电子书"
     type: "merge_to_epub"
-    aligned_key: "3_response"
-    aligned_dir: "{paths.aligned}"
+    aligned_key: "4_response"
+    aligned_dir: "{paths.polished}"
     output_dir: "{paths.results}"
     output_filename: "{book_name}_translated.epub"
     book_title: "{book_name}"
-    # 输出：4_response (ePub路径)
+    # 输出：5_response (ePub路径)
 
 display:
   steps:
@@ -159,6 +226,9 @@ display:
       label: "对齐"
       show: concurrent_stats
     "4":
+      label: "润色标注"
+      show: concurrent_stats
+    "5":
       label: "输出文件"
       show: file_output
       keys: ["output_epub", "output_txt"]

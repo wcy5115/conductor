@@ -587,19 +587,16 @@ export class MergeToEpubAction extends BaseAction {
       throw new Error(`对齐文件目录不存在: ${alignedDirResolved}`);
     }
 
-    // 读取 aligned_*.txt 文件并按文件名排序
-    // readdirSync 返回文件名列表 → filter 筛选以 aligned_ 开头且 .txt 结尾的文件 → sort 按字母序排序
+    // 读取 *.txt 文件并按文件名排序
     const alignedFiles = fs
       .readdirSync(alignedDirResolved)
-      .filter(
-        (f) => f.startsWith("aligned_") && f.endsWith(".txt")
-      )
+      .filter((f) => f.endsWith(".txt"))
       .sort()
       .map((f) => path.join(alignedDirResolved, f));
 
     if (alignedFiles.length === 0) {
       throw new Error(
-        `未找到对齐文件: ${alignedDirResolved}/aligned_*.txt`
+        `未找到文本文件: ${alignedDirResolved}/*.txt`
       );
     }
 

@@ -25,10 +25,10 @@ import { WorkflowRunner } from "../../src/core/workflow_runner.js";
 // ============================================================
 
 // INPUT_EPUB：输入电子书文件的路径（支持 .epub 和 .txt）
-const INPUT_EPUB = String.raw`C:\Users\wcy51\Downloads\example.epub`;
+const INPUT_EPUB = String.raw`C:\Users\wcy51\Downloads\the_economist_2026-4-3.txt`;
 
 // BOOK_NAME：书名，用于输出文件的命名（如 "浪潮之巅_translated.epub"）
-const BOOK_NAME = "example_book";
+const BOOK_NAME = "The-Economist-2026-4-3";
 
 // ============================================================
 // 主函数
