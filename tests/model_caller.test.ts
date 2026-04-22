@@ -1,35 +1,26 @@
 /**
- * model_caller.ts 单元测试
+ * Unit tests for src/model_caller.ts.
  *
- * 测试 src/model_caller.ts 中的模型调用映射模块：
- * - resolveEnvPlaceholders() — 递归替换 ${ENV_VAR} 占位符（内部函数，通过 loadModelMappings 间接测试）
- * - callModel()             — 通过模型简称调用 AI 模型（核心函数）
- * - listModels()            — 列出所有可用模型简称
- * - getModelInfo()          — 获取模型详细信息（API 密钥脱敏）
- * - addCustomModel()        — 动态添加自定义模型配置
- * - getModelPricingInfo()   — 获取模型价格配置
- * - reloadModels()          — 重新加载 models.yaml（热重载）
- *
- * 测试策略：
- *   - 使用 vi.mock 模拟 llm_client.chat 和 mock_llm 模块，避免真实 API 调用
- *   - 使用 vi.mock 模拟 fs 和 js-yaml，避免依赖真实的 models.yaml 文件
- *   - 直接操作 MODEL_MAPPINGS 全局变量来设置测试用的模型配置
+ * The module under test maps short model aliases to provider configs and then
+ * calls the lower-level LLM client. These tests keep real API calls out of the
+ * loop by mocking llm_client.ts and mock_llm.ts.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ============================================================
-// Mock 外部依赖
+// Mock external dependencies
 // ============================================================
 
-// mock llm_client.ts —— chat 函数返回可控的测试数据
+// Mock llm_client.ts. chat() returns controlled test data instead of calling a
+// real provider API.
 const mockChat = vi.fn();
 vi.mock("../src/llm_client.js", () => ({
   chat: (...args: unknown[]) => mockChat(...args),
-  // LlmResult 和 LlmCallOptions 是类型，mock 模块中不需要提供
 }));
 
-// mock mock_llm.ts —— 控制 mock 模型的检测和调用行为
+// Mock mock_llm.ts so each test can decide whether a model should use the mock
+// path and what that mock call returns.
 const mockIsMockModel = vi.fn().mockReturnValue(false);
 const mockMockLlmCall = vi.fn();
 vi.mock("../src/mock_llm.js", () => ({
@@ -37,7 +28,7 @@ vi.mock("../src/mock_llm.js", () => ({
   mockLlmCall: (...args: unknown[]) => mockMockLlmCall(...args),
 }));
 
-// ---- 导入被测模块（必须在 vi.mock 之后） ----
+// Import the module under test after vi.mock() so the imports above are mocked.
 import {
   callModel,
   listModels,
@@ -50,12 +41,14 @@ import {
 import type { SingleModelConfig, ModelMappings } from "../src/model_caller";
 
 // ============================================================
-// 测试用的模型配置数据
+// Test data
 // ============================================================
 
 /**
- * 创建一个完整的单配置模型（字典格式）
- * 每个测试都用这个工厂函数生成干净的测试数据，避免测试间互相污染
+ * Create a complete object-shape model config.
+ *
+ * Every test uses fresh config objects from this factory, which prevents state
+ * from leaking between test cases.
  */
 function makeConfig(overrides?: Partial<SingleModelConfig>): SingleModelConfig {
   return {
@@ -70,24 +63,20 @@ function makeConfig(overrides?: Partial<SingleModelConfig>): SingleModelConfig {
 }
 
 // ============================================================
-// 测试生命周期
+// Test lifecycle
 // ============================================================
 
-// 保存初始的 MODEL_MAPPINGS，每个测试用例结束后恢复
-// 这样每个测试对 MODEL_MAPPINGS 的修改不会影响其他测试
+// MODEL_MAPPINGS is mutable by design. Each test gets a clean snapshot and then
+// restores it in afterEach().
 let originalMappings: ModelMappings;
 
 beforeEach(() => {
-  // 深拷贝保存当前配置
   originalMappings = JSON.parse(JSON.stringify(MODEL_MAPPINGS));
-  // 重置所有 mock 函数的调用记录和返回值
   vi.resetAllMocks();
-  // isMockModel 默认返回 false（非 mock 模型），具体测试中按需覆盖
   mockIsMockModel.mockReturnValue(false);
 });
 
 afterEach(() => {
-  // 恢复原始配置：先清空所有键，再写回原始数据
   for (const key of Object.keys(MODEL_MAPPINGS)) {
     delete MODEL_MAPPINGS[key];
   }
@@ -95,135 +84,115 @@ afterEach(() => {
 });
 
 // ============================================================
-// callModel() 测试
+// callModel()
 // ============================================================
-// 源码逻辑（model_caller.ts:440-523）：
-//   1. 查找 MODEL_MAPPINGS[modelAlias]
-//   2. resolveConfig 解析出启用的配置
-//   3. isMockModel 检测是否为 mock 模型
-//   4. 检查 API 密钥
-//   5. 合并参数（调用方 → 配置文件 → 默认值）
-//   6. 调用 chat()
+
 describe("callModel", () => {
-  // ---- 成功调用 ----
-  it("字典格式配置：正常调用 chat 并返回结果", async () => {
-    // 准备：注入一个简单的测试模型
+  it("calls chat and returns the result for an object-shape config", async () => {
     MODEL_MAPPINGS["test-simple"] = makeConfig();
-    // chat 返回模拟的 LlmResult
     mockChat.mockResolvedValue({
-      content: "你好，我是AI",
+      content: "hello from ai",
       usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
     });
 
-    const result = await callModel("test-simple", "你好");
+    const result = await callModel("test-simple", "hello");
 
-    // 验证返回值
-    expect(result.content).toBe("你好，我是AI");
+    expect(result.content).toBe("hello from ai");
     expect(result.usage.total_tokens).toBe(15);
-    // 验证 chat 被正确调用（prompt、api_url、api_key、model_name、options）
     expect(mockChat).toHaveBeenCalledOnce();
-    expect(mockChat.mock.calls[0][0]).toBe("你好");           // prompt
-    expect(mockChat.mock.calls[0][1]).toBe("https://api.test.com/v1/chat/completions"); // api_url
-    expect(mockChat.mock.calls[0][2]).toBe("sk-test-key-12345"); // api_key
-    expect(mockChat.mock.calls[0][3]).toBe("test-model-v1");     // model_name
+    expect(mockChat.mock.calls[0][0]).toBe("hello");
+    expect(mockChat.mock.calls[0][1]).toBe("https://api.test.com/v1/chat/completions");
+    expect(mockChat.mock.calls[0][2]).toBe("sk-test-key-12345");
+    expect(mockChat.mock.calls[0][3]).toBe("test-model-v1");
   });
 
-  it("列表格式配置：选择 enabled: true 的配置", async () => {
-    // 准备：两个提供商，只有第二个启用
+  it("selects the enabled config from an array-shape config", async () => {
     MODEL_MAPPINGS["test-multi"] = [
       makeConfig({ provider: "provider-a", enabled: false, model_name: "model-a" }),
       makeConfig({ provider: "provider-b", enabled: true, model_name: "model-b" }),
     ];
-    mockChat.mockResolvedValue({ content: "来自B", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    mockChat.mockResolvedValue({ content: "from b", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
 
-    await callModel("test-multi", "测试");
+    await callModel("test-multi", "test prompt");
 
-    // 验证使用了 provider-b 的 model_name
     expect(mockChat.mock.calls[0][3]).toBe("model-b");
   });
 
-  // ---- 参数覆盖 ----
-  it("调用方参数覆盖配置文件中的 temperature 和 max_tokens", async () => {
+  it("lets call-time temperature and maxTokens override config values", async () => {
     MODEL_MAPPINGS["test-override"] = makeConfig({ temperature: 0.3, max_tokens: 1000 });
     mockChat.mockResolvedValue({ content: "ok", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
 
-    await callModel("test-override", "测试", 0.9, 5000);
+    await callModel("test-override", "test prompt", 0.9, 5000);
 
-    // chat 的第 5 个参数是 options 对象
     const options = mockChat.mock.calls[0][4];
     expect(options.temperature).toBe(0.9);
     expect(options.max_tokens).toBe(5000);
   });
 
-  it("调用方未传参数时使用配置文件中的值", async () => {
+  it("uses config temperature and max_tokens when call-time values are omitted", async () => {
     MODEL_MAPPINGS["test-default"] = makeConfig({ temperature: 0.2, max_tokens: 8000 });
     mockChat.mockResolvedValue({ content: "ok", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
 
-    await callModel("test-default", "测试");
+    await callModel("test-default", "test prompt");
 
     const options = mockChat.mock.calls[0][4];
     expect(options.temperature).toBe(0.2);
     expect(options.max_tokens).toBe(8000);
   });
 
-  it("配置文件也未设置时使用硬编码默认值 (0.7, 2000)", async () => {
-    // 创建一个没有 temperature 和 max_tokens 的配置
+  it("uses hard-coded defaults when no temperature or max_tokens are configured", async () => {
     const config = makeConfig();
     delete (config as Record<string, unknown>)["temperature"];
     delete (config as Record<string, unknown>)["max_tokens"];
     MODEL_MAPPINGS["test-hardcode"] = config;
     mockChat.mockResolvedValue({ content: "ok", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
 
-    await callModel("test-hardcode", "测试");
+    await callModel("test-hardcode", "test prompt");
 
     const options = mockChat.mock.calls[0][4];
     expect(options.temperature).toBe(0.7);
     expect(options.max_tokens).toBe(2000);
   });
 
-  // ---- timeout 参数 ----
-  it("传入 timeout 时应透传给 chat", async () => {
+  it("passes timeout through to chat when provided", async () => {
     MODEL_MAPPINGS["test-timeout"] = makeConfig();
     mockChat.mockResolvedValue({ content: "ok", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
 
-    await callModel("test-timeout", "测试", undefined, undefined, 60000);
+    await callModel("test-timeout", "test prompt", undefined, undefined, 60000);
 
     const options = mockChat.mock.calls[0][4];
     expect(options.timeout).toBe(60000);
   });
 
-  it("未传 timeout 时 options 中不包含 timeout 字段", async () => {
+  it("omits timeout from options when no timeout is provided", async () => {
     MODEL_MAPPINGS["test-no-timeout"] = makeConfig();
     mockChat.mockResolvedValue({ content: "ok", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
 
-    await callModel("test-no-timeout", "测试");
+    await callModel("test-no-timeout", "test prompt");
 
     const options = mockChat.mock.calls[0][4];
     expect(options.timeout).toBeUndefined();
   });
 
-  // ---- extra_params 透传 ----
-  it("配置中的 extra_params 应透传给 chat", async () => {
+  it("passes extra_params through to chat", async () => {
     MODEL_MAPPINGS["test-extra"] = makeConfig({
       extra_params: { enable_thinking: true },
     });
     mockChat.mockResolvedValue({ content: "ok", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
 
-    await callModel("test-extra", "测试");
+    await callModel("test-extra", "test prompt");
 
     const options = mockChat.mock.calls[0][4];
     expect(options.extra_params).toEqual({ enable_thinking: true });
   });
 
-  // ---- OpenRouter 特殊 headers ----
-  it("provider 为 openrouter 时添加额外 headers", async () => {
+  it("adds OpenRouter attribution headers when environment values are set", async () => {
     MODEL_MAPPINGS["test-openrouter"] = makeConfig({ provider: "openrouter" });
     mockChat.mockResolvedValue({ content: "ok", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
-    // 设置 OpenRouter 相关环境变量
     process.env["OPENROUTER_SITE_URL"] = "https://mysite.com";
     process.env["OPENROUTER_SITE_NAME"] = "MyApp";
 
-    await callModel("test-openrouter", "测试");
+    await callModel("test-openrouter", "test prompt");
 
     const options = mockChat.mock.calls[0][4];
     expect(options.extra_headers).toEqual({
@@ -231,94 +200,89 @@ describe("callModel", () => {
       "X-Title": "MyApp",
     });
 
-    // 清理环境变量
     delete process.env["OPENROUTER_SITE_URL"];
     delete process.env["OPENROUTER_SITE_NAME"];
   });
 
-  // ---- Mock 模型拦截 ----
-  it("mock 模型走模拟路径，不调用真实 chat", async () => {
+  it("routes mock models to mock_llm without calling chat", async () => {
     MODEL_MAPPINGS["mock-test"] = makeConfig({ provider: "mock" });
     mockIsMockModel.mockReturnValue(true);
     mockMockLlmCall.mockReturnValue({
-      content: "模拟响应",
+      content: "mock response",
       usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
     });
 
-    const result = await callModel("mock-test", "测试");
+    const result = await callModel("mock-test", "test prompt");
 
-    expect(result.content).toBe("模拟响应");
+    expect(result.content).toBe("mock response");
     expect(mockMockLlmCall).toHaveBeenCalledOnce();
-    // 真实 chat 不应被调用
     expect(mockChat).not.toHaveBeenCalled();
   });
 
-  // ---- 错误场景 ----
-  it("模型简称不存在时抛出错误并列出可用模型", async () => {
-    await expect(callModel("不存在的模型", "你好")).rejects.toThrow("未知的模型简称");
-    await expect(callModel("不存在的模型", "你好")).rejects.toThrow("不存在的模型");
+  it("throws and lists available models when the alias is unknown", async () => {
+    await expect(callModel("missing-model", "hello")).rejects.toThrow("Unknown model alias");
+    await expect(callModel("missing-model", "hello")).rejects.toThrow("missing-model");
   });
 
-  it("API 密钥为空时抛出错误", async () => {
+  it("throws when the API key is empty", async () => {
     MODEL_MAPPINGS["test-no-key"] = makeConfig({ api_key: "" });
 
-    await expect(callModel("test-no-key", "你好")).rejects.toThrow("API密钥未配置或为空");
+    await expect(callModel("test-no-key", "hello")).rejects.toThrow("API key is missing or empty");
   });
 
-  it("API 密钥只有空格时抛出错误", async () => {
+  it("throws when the API key contains only whitespace", async () => {
     MODEL_MAPPINGS["test-blank-key"] = makeConfig({ api_key: "   " });
 
-    await expect(callModel("test-blank-key", "你好")).rejects.toThrow("API密钥未配置或为空");
+    await expect(callModel("test-blank-key", "hello")).rejects.toThrow("API key is missing or empty");
   });
 });
 
 // ============================================================
-// resolveConfig() 测试（通过 callModel 间接测试）
+// resolveConfig(), tested indirectly through callModel()
 // ============================================================
-// resolveConfig 是内部函数未导出，通过 callModel 的行为间接验证
-describe("resolveConfig（通过 callModel 间接测试）", () => {
-  it("列表格式：没有 enabled: true 的配置时抛出错误", async () => {
+
+describe("resolveConfig through callModel", () => {
+  it("throws when an array-shape config has no enabled entry", async () => {
     MODEL_MAPPINGS["test-none-enabled"] = [
       makeConfig({ provider: "a", enabled: false }),
       makeConfig({ provider: "b", enabled: false }),
     ];
 
-    await expect(callModel("test-none-enabled", "你好")).rejects.toThrow("没有启用的配置");
+    await expect(callModel("test-none-enabled", "hello")).rejects.toThrow("has no enabled config");
   });
 
-  it("列表格式：多个 enabled: true 时抛出错误", async () => {
+  it("throws when an array-shape config has multiple enabled entries", async () => {
     MODEL_MAPPINGS["test-multi-enabled"] = [
       makeConfig({ provider: "a", enabled: true }),
       makeConfig({ provider: "b", enabled: true }),
     ];
 
-    await expect(callModel("test-multi-enabled", "你好")).rejects.toThrow("有多个启用的配置");
+    await expect(callModel("test-multi-enabled", "hello")).rejects.toThrow("multiple enabled configs");
   });
 
-  it("列表格式：enabled 字段为非布尔值时抛出错误", async () => {
+  it("throws when enabled is not a boolean", async () => {
     MODEL_MAPPINGS["test-bad-enabled"] = [
-      // enabled 写成了字符串 "true" 而不是布尔值 true
       makeConfig({ provider: "a", enabled: "true" as unknown as boolean }),
     ];
 
-    await expect(callModel("test-bad-enabled", "你好")).rejects.toThrow("必须是布尔值");
+    await expect(callModel("test-bad-enabled", "hello")).rejects.toThrow("must be a boolean");
   });
 
-  it("列表格式：缺少必需字段时抛出错误", async () => {
+  it("throws when a required field is missing", async () => {
     const badConfig = makeConfig({ enabled: true });
     delete (badConfig as Record<string, unknown>)["model_name"];
     MODEL_MAPPINGS["test-missing-field"] = [badConfig];
 
-    await expect(callModel("test-missing-field", "你好")).rejects.toThrow("缺少必需字段");
+    await expect(callModel("test-missing-field", "hello")).rejects.toThrow("Missing required fields");
   });
 });
 
 // ============================================================
-// listModels() 测试
+// listModels()
 // ============================================================
+
 describe("listModels", () => {
-  it("返回所有模型简称并按字母排序", () => {
-    // 清空并注入测试数据
+  it("returns all model aliases in alphabetical order", () => {
     for (const key of Object.keys(MODEL_MAPPINGS)) delete MODEL_MAPPINGS[key];
     MODEL_MAPPINGS["zebra"] = makeConfig();
     MODEL_MAPPINGS["alpha"] = makeConfig();
@@ -328,17 +292,18 @@ describe("listModels", () => {
     expect(models).toEqual(["alpha", "middle", "zebra"]);
   });
 
-  it("MODEL_MAPPINGS 为空时返回空数组", () => {
+  it("returns an empty array when MODEL_MAPPINGS is empty", () => {
     for (const key of Object.keys(MODEL_MAPPINGS)) delete MODEL_MAPPINGS[key];
     expect(listModels()).toEqual([]);
   });
 });
 
 // ============================================================
-// getModelInfo() 测试
+// getModelInfo()
 // ============================================================
+
 describe("getModelInfo", () => {
-  it("字典格式：返回配置并脱敏 API 密钥", () => {
+  it("returns object-shape config data with the API key masked", () => {
     MODEL_MAPPINGS["test-info"] = makeConfig({ api_key: "sk-secret-123" });
 
     const info = getModelInfo("test-info");
@@ -348,14 +313,14 @@ describe("getModelInfo", () => {
     expect(info!["model_name"]).toBe("test-model-v1");
   });
 
-  it("API 密钥为空时显示'未配置'", () => {
+  it("shows Not configured when the API key is empty", () => {
     MODEL_MAPPINGS["test-no-key-info"] = makeConfig({ api_key: "" });
 
     const info = getModelInfo("test-no-key-info");
-    expect(info!["api_key"]).toBe("未配置");
+    expect(info!["api_key"]).toBe("Not configured");
   });
 
-  it("列表格式：返回 enabled: true 的配置", () => {
+  it("returns the enabled entry from an array-shape config", () => {
     MODEL_MAPPINGS["test-multi-info"] = [
       makeConfig({ provider: "disabled-one", enabled: false, model_name: "model-a" }),
       makeConfig({ provider: "enabled-one", enabled: true, model_name: "model-b" }),
@@ -366,37 +331,38 @@ describe("getModelInfo", () => {
     expect(info!["model_name"]).toBe("model-b");
   });
 
-  it("列表格式：没有启用的配置时返回错误对象", () => {
+  it("returns an error object when an array-shape config has no enabled entry", () => {
     MODEL_MAPPINGS["test-none-info"] = [
       makeConfig({ provider: "a", enabled: false }),
       makeConfig({ provider: "b", enabled: false }),
     ];
 
     const info = getModelInfo("test-none-info");
-    expect(info!["error"]).toBe("没有启用的配置");
+    expect(info!["error"]).toBe("No enabled config");
     expect(info!["available_providers"]).toEqual(["a", "b"]);
   });
 
-  it("列表格式：多个启用时返回错误对象", () => {
+  it("returns an error object when an array-shape config has multiple enabled entries", () => {
     MODEL_MAPPINGS["test-dup-info"] = [
       makeConfig({ provider: "x", enabled: true }),
       makeConfig({ provider: "y", enabled: true }),
     ];
 
     const info = getModelInfo("test-dup-info");
-    expect(info!["error"]).toBe("配置错误：有多个启用的配置");
+    expect(info!["error"]).toBe("Config error: multiple enabled configs");
   });
 
-  it("模型不存在时返回 null", () => {
-    expect(getModelInfo("根本不存在")).toBeNull();
+  it("returns null when the model does not exist", () => {
+    expect(getModelInfo("missing-model")).toBeNull();
   });
 });
 
 // ============================================================
-// addCustomModel() 测试
+// addCustomModel()
 // ============================================================
+
 describe("addCustomModel", () => {
-  it("添加自定义模型后可通过 callModel 调用", async () => {
+  it("adds a custom model that can be called through callModel", async () => {
     addCustomModel(
       "my-custom",
       "custom-provider",
@@ -407,21 +373,21 @@ describe("addCustomModel", () => {
       4000
     );
 
-    mockChat.mockResolvedValue({ content: "自定义响应", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    mockChat.mockResolvedValue({ content: "custom response", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
 
-    const result = await callModel("my-custom", "测试自定义模型");
-    expect(result.content).toBe("自定义响应");
+    const result = await callModel("my-custom", "test custom model");
+    expect(result.content).toBe("custom response");
     expect(mockChat.mock.calls[0][1]).toBe("https://custom.api/v1/chat");
     expect(mockChat.mock.calls[0][3]).toBe("custom-model-v2");
   });
 
-  it("添加自定义模型后 listModels 能列出", () => {
+  it("makes the custom model visible through listModels", () => {
     addCustomModel("new-model", "p", "url", "key", "name");
 
     expect(listModels()).toContain("new-model");
   });
 
-  it("extras 参数中的额外字段能合并到配置中", () => {
+  it("merges extra fields into the custom model config", () => {
     addCustomModel("with-extras", "p", "url", "key", "name", 0.7, 2000, {
       pricing: { input: 1.0, output: 2.0, currency: "USD" },
     });
@@ -432,10 +398,11 @@ describe("addCustomModel", () => {
 });
 
 // ============================================================
-// getModelPricingInfo() 测试
+// getModelPricingInfo()
 // ============================================================
+
 describe("getModelPricingInfo", () => {
-  it("字典格式：返回 pricing 配置", () => {
+  it("returns pricing from an object-shape config", () => {
     MODEL_MAPPINGS["test-priced"] = makeConfig({
       pricing: { input: 2.5, output: 10.0, currency: "USD" },
     });
@@ -444,7 +411,7 @@ describe("getModelPricingInfo", () => {
     expect(pricing).toEqual({ input: 2.5, output: 10.0, currency: "USD" });
   });
 
-  it("字典格式：未配置 pricing 时返回 null", () => {
+  it("returns null when pricing is not configured", () => {
     const config = makeConfig();
     delete config.pricing;
     MODEL_MAPPINGS["test-no-price"] = config;
@@ -452,7 +419,7 @@ describe("getModelPricingInfo", () => {
     expect(getModelPricingInfo("test-no-price")).toBeNull();
   });
 
-  it("列表格式：返回 enabled 配置的 pricing", () => {
+  it("returns pricing from the enabled array-shape config", () => {
     MODEL_MAPPINGS["test-multi-price"] = [
       makeConfig({ enabled: false, pricing: { input: 1, output: 1, currency: "CNY" } }),
       makeConfig({ enabled: true, pricing: { input: 5, output: 15, currency: "USD" } }),
@@ -462,7 +429,7 @@ describe("getModelPricingInfo", () => {
     expect(pricing).toEqual({ input: 5, output: 15, currency: "USD" });
   });
 
-  it("列表格式：没有启用的配置时返回 null", () => {
+  it("returns null when an array-shape config has no enabled entry", () => {
     MODEL_MAPPINGS["test-no-enabled-price"] = [
       makeConfig({ enabled: false }),
     ];
@@ -470,26 +437,22 @@ describe("getModelPricingInfo", () => {
     expect(getModelPricingInfo("test-no-enabled-price")).toBeNull();
   });
 
-  it("模型不存在时返回 null", () => {
-    expect(getModelPricingInfo("根本不存在")).toBeNull();
+  it("returns null when the model does not exist", () => {
+    expect(getModelPricingInfo("missing-model")).toBeNull();
   });
 });
 
 // ============================================================
-// reloadModels() 测试
+// reloadModels()
 // ============================================================
-// reloadModels 依赖 fs 和 yaml 读取真实文件
-// 这里只测试它不会崩溃，并且确实重新加载了配置
+
 describe("reloadModels", () => {
-  it("重新加载后 MODEL_MAPPINGS 被重置（动态添加的模型会消失）", () => {
-    // 动态添加一个模型
+  it("reloads MODEL_MAPPINGS and removes runtime-only models", () => {
     addCustomModel("temp-model", "p", "url", "key", "name");
     expect(listModels()).toContain("temp-model");
 
-    // 重新加载（从 models.yaml 读取）
     reloadModels();
 
-    // 动态添加的模型应该消失了（除非 models.yaml 中也有这个名字）
     expect(listModels()).not.toContain("temp-model");
   });
 });

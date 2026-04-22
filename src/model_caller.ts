@@ -1,45 +1,38 @@
 /**
- * 模型调用映射模块
+ * Model alias mapping and dispatch.
  *
- * 本模块在 llm_client.ts（底层 HTTP 调用）之上提供了一层"简称映射"抽象：
- *   - 用户只需传入模型简称（如 "gpt4"、"kimi"），无需关心 API URL、密钥、模型全名等细节
- *   - 所有模型的连接信息集中存储在项目根目录的 models.yaml 中
- *   - api_key 字段支持 ${ENV_VAR} 语法，运行时自动替换为环境变量的值（密钥不落地）
+ * This module sits above llm_client.ts. It lets callers use short model aliases
+ * such as "gpt4" or "kimi" without knowing the provider URL, API key, or full
+ * model name. The connection details live in models.yaml.
  *
- * 调用链路：
- *   callModel("gpt4", "你好")
- *     → 从 MODEL_MAPPINGS 查找 "gpt4" 对应的配置
- *     → 调用 llm_client.chat(prompt, apiUrl, apiKey, modelName, options)
- *       → 调用 llm_client.callLlmApi(...)
- *         → fetch(apiUrl, ...)
+ * The api_key field supports ${ENV_VAR} placeholders. At runtime those
+ * placeholders are replaced with environment variable values, so real secrets do
+ * not need to be written into models.yaml.
  *
- * models.yaml 支持两种配置格式：
- *   1. 字典格式（单一配置）：一个模型简称对应一个固定的 API 提供商
- *   2. 列表格式（多配置）：一个模型简称对应多个提供商，通过 enabled: true 选择当前使用哪个
- *      这种设计方便在不同提供商之间快速切换（如从 OpenAI 切到 Azure），只需改 enabled 字段
+ * Typical call path:
+ *   callModel("gpt4", "hello")
+ *     -> find MODEL_MAPPINGS["gpt4"]
+ *     -> call llm_client.chat(prompt, apiUrl, apiKey, modelName, options)
+ *     -> llm_client.callLlmApi(...)
+ *     -> fetch(apiUrl, ...)
+ *
+ * models.yaml supports two shapes:
+ *   1. Object shape: one alias maps directly to one provider config.
+ *   2. Array shape: one alias maps to several provider configs, and exactly one
+ *      entry is selected with enabled: true.
  */
 
-// fs 是 Node.js 内置的文件系统模块，用于读取 models.yaml 配置文件
 import * as fs from "fs";
-// path 是 Node.js 内置的路径处理模块，用于拼接路径、获取目录名
 import * as path from "path";
-// js-yaml 是第三方 YAML 解析库，将 YAML 文本解析为 JavaScript 对象
-// YAML 比 JSON 更适合做配置文件（支持注释、更易读）
 import * as yaml from "js-yaml";
-// fileURLToPath 将 ESM 模块的 import.meta.url（file:///...格式）转为普通文件路径
-// ESM 模块没有 __dirname，需要用这个方法获取当前文件所在目录
 import { fileURLToPath } from "url";
-// chat 是 llm_client.ts 提供的简化调用接口，接收 prompt 和连接参数，返回 LlmResult
-// LlmResult 包含 content（AI 回复文本）和 usage（token 用量）
 import { chat, LlmResult, LlmCallOptions } from "./llm_client.js";
-// mockLlmCall 是 mock_llm.ts 提供的模拟 LLM 调用函数
-// isMockModel 判断模型是否为 mock 模型（模型名以 "mock" 开头或 provider 为 "mock"）
-// MockConfig 是 mock 模式的配置类型（mock_mappings 映射表）
-// 当检测到 mock 模型时，callModel 走模拟路径，不发起真实 API 请求
 import { mockLlmCall, isMockModel, MockConfig } from "./mock_llm.js";
 
 /**
- * 简易日志器（与 llm_client.ts 相同的设计理由：保持依赖最小化）
+ * Minimal logger.
+ *
+ * Keeping this tiny avoids adding a logging dependency to the core library.
  */
 const logger = {
   info: (msg: string) => console.info(msg),
@@ -48,21 +41,14 @@ const logger = {
 };
 
 // ============================================================
-// 类型定义
+// Types
 // ============================================================
 
 /**
- * 模型价格信息
+ * Pricing metadata for a model.
  *
- * 用于成本计算（cost_calculator.ts 会使用这些价格来计算每次调用的花费）
- *
- * input:    输入 token 的单价（每百万 token 的价格）
- * output:   输出 token 的单价（每百万 token 的价格）
- * currency: 货币单位，如 "USD"、"CNY"
- *
- * 示例（GPT-4o）：
- *   { input: 2.5, output: 10.0, currency: "USD" }
- *   表示：输入 $2.5/百万token，输出 $10.0/百万token
+ * Values are prices per one million tokens. cost_calculator.ts uses this
+ * structure to estimate the cost of each LLM call.
  */
 export interface ModelPricing {
   input: number;
@@ -71,33 +57,30 @@ export interface ModelPricing {
 }
 
 /**
- * 单个模型的完整配置
+ * One complete provider configuration for a model alias.
  *
- * 对应 models.yaml 中一个提供商的配置块。
+ * enabled:
+ *   Only meaningful in the array shape. Object-shape configs are treated as
+ *   enabled by default.
  *
- * enabled?:      是否启用（仅在列表格式中有意义，字典格式默认启用）
- * provider:      提供商名称，如 "openai"、"azure"、"openrouter"、"kimi"
- * api_url:       API 端点 URL，如 "https://api.openai.com/v1/chat/completions"
- * api_key:       API 密钥，支持 ${ENV_VAR} 占位符（如 "${OPENAI_API_KEY}"）
- * model_name:    模型全名，如 "gpt-4o"、"moonshot-v1-8k"
- * temperature?:  默认温度（可被 callModel 的参数覆盖）
- * max_tokens?:   默认最大 token 数（可被 callModel 的参数覆盖）
- * extra_params?: 额外的 API 请求参数（如思考模式开关），透传给 llm_client
- *                类型 Record<string, unknown> 等价于 Python 的 dict[str, Any]
- * pricing?:      价格信息，用于成本计算
- * [key: string]: unknown — 允许携带任意额外字段（前向兼容）
+ * provider:
+ *   A provider label such as "openai", "azure", "openrouter", or "kimi".
  *
- * models.yaml 示例：
- *   gpt4:
- *     provider: openai
- *     api_url: https://api.openai.com/v1/chat/completions
- *     api_key: ${OPENAI_API_KEY}
- *     model_name: gpt-4o
- *     temperature: 0.7
- *     pricing:
- *       input: 2.5
- *       output: 10.0
- *       currency: USD
+ * api_url:
+ *   The chat-completions compatible endpoint URL.
+ *
+ * api_key:
+ *   The API key, usually written as a placeholder such as ${OPENAI_API_KEY}.
+ *
+ * model_name:
+ *   The provider-specific model identifier, such as "gpt-4o".
+ *
+ * extra_params:
+ *   Provider-specific request parameters that are passed through to llm_client.
+ *
+ * [key: string]: unknown:
+ *   Allows forward-compatible provider-specific fields without changing this
+ *   interface every time a provider adds an option.
  */
 export interface SingleModelConfig {
   enabled?: boolean;
@@ -113,158 +96,97 @@ export interface SingleModelConfig {
 }
 
 /**
- * 模型配置条目：单配置（字典格式）或多配置（列表格式）
- *
- * 字典格式示例（直接是一个 SingleModelConfig）：
- *   gpt4:
- *     provider: openai
- *     api_url: ...
- *
- * 列表格式示例（数组中每个元素是一个 SingleModelConfig）：
- *   gpt4:
- *     - provider: openai
- *       enabled: true
- *       api_url: ...
- *     - provider: azure
- *       enabled: false
- *       api_url: ...
+ * A model alias can point to one config object or to a list of provider configs.
  */
 export type ModelConfigEntry = SingleModelConfig | SingleModelConfig[];
 
 /**
- * 全部模型配置的集合
+ * All known model aliases.
  *
- * 键是模型简称（如 "gpt4"），值是该模型的配置条目
- * Record<string, ModelConfigEntry> 等价于 Python 的 dict[str, ModelConfigEntry]
+ * The key is the short alias used by the workflow. The value is the provider
+ * config or the provider-config list for that alias.
  */
 export type ModelMappings = Record<string, ModelConfigEntry>;
 
 // ============================================================
-// 从 models.yaml 加载模型配置
+// Loading models.yaml
 // ============================================================
 
 /**
- * 递归解析字符串中的 ${ENV_VAR} 占位符，替换为对应的环境变量值
+ * Recursively replace ${ENV_VAR} placeholders inside strings.
  *
- * 这个函数是递归的——它会遍历嵌套的对象和数组，替换所有层级中的占位符。
+ * This function walks nested arrays and objects so placeholders can appear in
+ * any provider field, not only at the top level. Object keys are left unchanged.
  *
- * 处理规则：
- *   - string 类型：查找并替换所有 ${...} 占位符
- *   - Array 类型：递归处理每个元素
- *   - Object 类型：递归处理每个值（键不替换）
- *   - 其他类型（number、boolean 等）：原样返回
- *
- * 示例：
- *   输入："Bearer ${API_KEY}"（假设环境变量 API_KEY="sk-abc123"）
- *   输出："Bearer sk-abc123"
- *
- *   输入：{ api_key: "${KEY}", retries: 3 }
- *   输出：{ api_key: "实际密钥值", retries: 3 }
- *
- * @param value 任意类型的值，可能包含 ${ENV_VAR} 占位符
- * @returns 替换后的值，类型与输入相同
+ * Examples:
+ *   "Bearer ${API_KEY}" -> "Bearer sk-abc123"
+ *   { api_key: "${KEY}", retries: 3 } -> { api_key: "sk-abc123", retries: 3 }
  */
 function resolveEnvPlaceholders(value: unknown): unknown {
   if (typeof value === "string") {
-    // 正则 /\$\{(\w+)\}/g 匹配 ${变量名} 格式的占位符
-    //   \$\{  — 匹配字面量 "${" （$ 和 { 都是正则特殊字符，需要转义）
-    //   (\w+) — 捕获组，匹配一个或多个"单词字符"（字母、数字、下划线）作为变量名
-    //   \}    — 匹配字面量 "}"
-    //   g     — 全局匹配，替换字符串中所有出现的占位符
-    // replace 的回调参数：_ 是完整匹配（如 "${API_KEY}"），name 是捕获组（如 "API_KEY"）
-    // process.env[name] 从环境变量中读取值，?? "" 在变量未设置时返回空字符串
     return value.replace(/\$\{(\w+)\}/g, (_, name: string) => process.env[name] ?? "");
   }
   if (Array.isArray(value)) {
-    // 数组：对每个元素递归调用自身
     return value.map(resolveEnvPlaceholders);
   }
   if (value !== null && typeof value === "object") {
-    // 对象：对每个值递归调用自身（键保持不变）
-    // Object.entries 将对象转为 [key, value] 数组
-    // Object.fromEntries 将 [key, value] 数组转回对象
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, resolveEnvPlaceholders(v)])
     );
   }
-  // number、boolean、null 等类型：原样返回
   return value;
 }
 
 /**
- * 查找 models.yaml 文件的路径
+ * Locate models.yaml.
  *
- * 查找策略（按优先级）：
- *   1. 环境变量 MODELS_YAML_PATH（如果设置了，直接使用）
- *   2. 从当前文件位置向上推导项目根目录，拼接 models.yaml
+ * Lookup order:
+ *   1. MODELS_YAML_PATH, when provided.
+ *   2. The project root inferred from this module's location.
  *
- * 之所以需要特殊处理，是因为 ESM 模块没有 __dirname 变量（CommonJS 才有），
- * 需要通过 import.meta.url → fileURLToPath → path.dirname 来获取当前目录。
- *
- * @returns models.yaml 的绝对路径
+ * ESM modules do not have __dirname, so import.meta.url must first be converted
+ * into a normal file path.
  */
 function findModelsYaml(): string {
-  // 优先使用环境变量指定的路径（方便测试和部署时覆盖）
   if (process.env["MODELS_YAML_PATH"]) return process.env["MODELS_YAML_PATH"];
 
-  // import.meta.url 返回当前文件的 URL 格式路径，如 "file:///D:/project/src/model_caller.ts"
-  // fileURLToPath 将其转为普通路径，如 "D:/project/src/model_caller.ts"
-  // path.dirname 取目录部分，如 "D:/project/src"
   const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  // 当前文件在 src/ 目录下，向上一级就是项目根目录
   const projectRoot = path.resolve(currentDir, "..");
   return path.join(projectRoot, "models.yaml");
 }
 
 /**
- * 从 models.yaml 加载并解析模型配置
+ * Load and parse model mappings from models.yaml.
  *
- * 完整流程：
- *   1. 定位 models.yaml 文件
- *   2. 读取文件内容并用 js-yaml 解析为 JavaScript 对象
- *   3. 递归替换所有 ${ENV_VAR} 占位符为实际环境变量值
- *   4. 自动检测并合并同目录下的 models.mock.yaml（如果存在）
- *
- * models.mock.yaml 是可选的 mock 模型配置文件，与正式模型分开管理：
- *   - 存在 → 自动合并到主配置中（mock 配置会覆盖同名的正式配置）
- *   - 不存在 → 静默跳过，不影响正常运行
- *
- * @returns 解析后的模型配置映射表
- * @throws Error 文件不存在或格式错误
+ * The optional models.mock.yaml file sits next to models.yaml and is merged into
+ * the main mappings when present. Mock entries intentionally override matching
+ * real entries, which makes tests and demos easy to run without touching the
+ * production model config.
  */
 function loadModelMappings(): ModelMappings {
   const yamlPath = findModelsYaml();
 
-  // 检查文件是否存在，不存在时抛出友好的错误提示
   if (!fs.existsSync(yamlPath)) {
     throw new Error(
-      `找不到模型配置文件: ${yamlPath}\n` +
-      `请在项目根目录创建 models.yaml，或通过环境变量 MODELS_YAML_PATH 指定路径。`
+      `Model config file not found: ${yamlPath}\n` +
+        `Create models.yaml in the project root, or set MODELS_YAML_PATH.`
     );
   }
 
-  // yaml.load 将 YAML 文本解析为 JavaScript 对象
-  // fs.readFileSync 同步读取文件（启动时只执行一次，同步不会阻塞）
   const raw = yaml.load(fs.readFileSync(yamlPath, "utf-8"));
-  // 校验顶层结构：必须是对象（键值对），不能是数组或标量
   if (!raw || typeof raw !== "object") {
-    throw new Error(`models.yaml 格式错误：顶层应为键值对象`);
+    throw new Error(`Invalid models.yaml format: top-level value must be a key-value object`);
   }
 
-  // 替换所有 ${ENV_VAR} 占位符为实际的环境变量值
   const mappings = resolveEnvPlaceholders(raw) as ModelMappings;
 
-  // 自动合并 models.mock.yaml（如果存在）
-  // mock 配置文件与 models.yaml 位于同一目录，文件名固定为 models.mock.yaml
   const mockYamlPath = yamlPath.replace(/models\.yaml$/, "models.mock.yaml");
   if (fs.existsSync(mockYamlPath)) {
     const mockRaw = yaml.load(fs.readFileSync(mockYamlPath, "utf-8"));
     if (mockRaw && typeof mockRaw === "object") {
-      // Object.assign 将 mock 配置合并到主配置中
-      // mock 配置中的同名键会覆盖主配置（这是预期行为：测试时可临时替换正式模型）
       const mockMappings = resolveEnvPlaceholders(mockRaw) as ModelMappings;
       Object.assign(mappings, mockMappings);
-      logger.info(`已加载 mock 模型配置: ${mockYamlPath} (${Object.keys(mockMappings).length} 个模型)`);
+      logger.info(`Loaded mock model config: ${mockYamlPath} (${Object.keys(mockMappings).length} models)`);
     }
   }
 
@@ -272,170 +194,114 @@ function loadModelMappings(): ModelMappings {
 }
 
 /**
- * 全局模型配置映射表
+ * Global model mappings loaded once at module import time.
  *
- * 模块加载时自动从 models.yaml 读取并初始化。
- * 使用 let（而非 const）是因为 reloadModels() 需要重新赋值实现热重载。
- *
- * 使用示例：
- *   MODEL_MAPPINGS["gpt4"]  → 获取 gpt4 的配置
- *   Object.keys(MODEL_MAPPINGS)  → 获取所有可用的模型简称
+ * This is let instead of const because reloadModels() replaces the whole mapping
+ * object after reading models.yaml again.
  */
 export let MODEL_MAPPINGS: ModelMappings = loadModelMappings();
 
 // ============================================================
-// 内部辅助
+// Internal helpers
 // ============================================================
 
 /**
- * 验证模型配置中的必需字段是否齐全
+ * Validate that a provider config has the required fields.
  *
- * 必需字段：provider、api_url、api_key、model_name
- * 任何缺失都会抛出错误，提示用户检查 models.yaml。
- *
- * Partial<SingleModelConfig> 表示所有字段都变为可选的——
- * 因为在验证之前我们不能保证字段一定存在，所以用 Partial 表达"可能不完整"的状态。
- *
- * @param config       待验证的配置对象
- * @param modelAlias   模型简称（用于错误消息）
- * @param providerName 提供商名称（用于错误消息）
- * @throws Error 缺少必需字段时抛出
+ * api_key is checked by key existence here, not by truthiness, because an unset
+ * environment variable intentionally resolves to an empty string. callModel()
+ * later turns that empty key into a clearer runtime error.
  */
 function validateConfigFields(
   config: Partial<SingleModelConfig>,
   modelAlias: string,
   providerName: string
 ): void {
-  // 定义必需字段列表
-  // keyof SingleModelConfig 是 TypeScript 的类型操作符，限制数组元素只能是接口中定义的字段名
   const requiredFields: (keyof SingleModelConfig)[] = ["provider", "api_url", "model_name"];
-  // filter 过滤出值为 falsy（undefined、空字符串等）的字段名
   const missing = requiredFields.filter((f) => !config[f]);
 
-  // api_key 单独检查：因为空字符串 "" 也是 falsy 但 "in" 操作符检查的是键是否存在
-  // 配置中可能写了 api_key: ""（环境变量未设置时），这时 !config["api_key"] 为 true
-  // 但我们用 "in" 检查是因为 api_key 允许为空字符串（resolveEnvPlaceholders 替换失败时）
   if (!("api_key" in config)) {
     missing.push("api_key");
   }
 
   if (missing.length > 0) {
     throw new Error(
-      `模型 '${modelAlias}' 的配置无效。\n` +
-        `缺少必需字段: ${missing.join(", ")}\n` +
-        `提供商: ${providerName}`
+      `Model '${modelAlias}' has an invalid config.\n` +
+        `Missing required fields: ${missing.join(", ")}\n` +
+        `Provider: ${providerName}`
     );
   }
 }
 
 /**
- * 从 ModelConfigEntry（可能是单配置或多配置列表）中解析出当前启用的配置
+ * Resolve a model config entry to the single provider config that should be used.
  *
- * 处理两种格式：
+ * Array shape:
+ *   The entry must contain exactly one item with enabled: true.
  *
- * 1. 列表格式 —— 筛选 enabled: true 的条目
- *    要求有且仅有一个 enabled: true，否则报错。
- *    示例：
- *      entry = [
- *        { provider: "openai",  enabled: false, ... },
- *        { provider: "azure",   enabled: true,  ... },  ← 选中这个
- *        { provider: "kimi",    enabled: false, ... },
- *      ]
- *
- * 2. 字典格式 —— 直接使用，无需选择
- *    示例：
- *      entry = { provider: "openai", api_url: "...", ... }
- *
- * @param entry      模型配置条目（从 MODEL_MAPPINGS 中获取）
- * @param modelAlias 模型简称（用于错误消息）
- * @returns 解析后的单个模型配置
- * @throws Error enabled 字段类型错误、没有启用的配置、或有多个启用的配置
+ * Object shape:
+ *   The object is used directly.
  */
 function resolveConfig(entry: ModelConfigEntry, modelAlias: string): SingleModelConfig {
-  // ========== 处理多配置格式（列表） ==========
   if (Array.isArray(entry)) {
-    // 第一步：验证 enabled 字段的类型必须是布尔值
-    // 防止用户在 YAML 中写成 enabled: "true"（字符串）或 enabled: 1（数字）
-    // 在 YAML 中 true/false 会自动解析为布尔值，但加引号 "true" 会变成字符串
     for (const item of entry) {
       if ("enabled" in item && typeof item.enabled !== "boolean") {
         throw new Error(
-          `配置错误：模型 '${modelAlias}' 的 'enabled' 字段必须是布尔值 (true/false)。\n` +
-            `提供商 '${item.provider ?? "unknown"}' 的 'enabled' 值为: ${JSON.stringify(item.enabled)} (${typeof item.enabled})\n` +
-            `请修改为 true 或 false`
+          `Config error: model '${modelAlias}' field 'enabled' must be a boolean (true/false).\n` +
+            `Provider '${item.provider ?? "unknown"}' enabled value is: ${JSON.stringify(item.enabled)} (${typeof item.enabled})\n` +
+            `Set it to true or false.`
         );
       }
     }
 
-    // 第二步：筛选出 enabled: true 的配置
     const enabledConfigs = entry.filter((item) => item.enabled === true);
 
-    // 第三步：确保有且仅有一个启用的配置
     if (enabledConfigs.length === 0) {
-      // 没有启用的配置 → 列出可用提供商，引导用户修改
       const providers = entry.map((item) => item.provider ?? "unknown");
       throw new Error(
-        `模型 '${modelAlias}' 没有启用的配置。\n` +
-          `可用提供商: ${providers.join(", ")}\n` +
-          `请在 MODEL_MAPPINGS 中将某个配置的 'enabled' 设为 true`
+        `Model '${modelAlias}' has no enabled config.\n` +
+          `Available providers: ${providers.join(", ")}\n` +
+          `Set one config's 'enabled' field to true in MODEL_MAPPINGS.`
       );
     }
 
     if (enabledConfigs.length > 1) {
-      // 多个启用的配置 → 歧义，必须只保留一个
       const providers = enabledConfigs.map((item) => item.provider ?? "unknown");
       throw new Error(
-        `配置错误：模型 '${modelAlias}' 有多个启用的配置！\n` +
-          `同时启用的提供商: ${providers.join(", ")}\n` +
-          `请确保只有一个配置的 'enabled' 为 true`
+        `Config error: model '${modelAlias}' has multiple enabled configs.\n` +
+          `Enabled providers: ${providers.join(", ")}\n` +
+          `Only one config can have 'enabled' set to true.`
       );
     }
 
-    // 展开运算符 {...} 创建浅拷贝，避免修改原始配置（后续 callModel 中可能修改 config）
-    // enabledConfigs[0]! 中的 ! 是非空断言：上面已确认 length === 1，所以 [0] 一定存在
-    // as SingleModelConfig：展开后 TypeScript 推断所有必填字段变为可选，需要手动恢复类型
     const config = { ...enabledConfigs[0]! } as SingleModelConfig;
-    // 验证选中的配置是否包含所有必需字段
     validateConfigFields(config, modelAlias, config.provider ?? "unknown");
     return config;
   }
 
-  // ========== 处理字典格式（单一配置） ==========
-  // 直接浅拷贝并验证
   const config = { ...entry };
   validateConfigFields(config, modelAlias, config.provider ?? "unknown");
   return config;
 }
 
 // ============================================================
-// 核心调用函数
+// Public model call
 // ============================================================
 
 /**
- * 通过模型简称调用 AI 模型（本模块的核心对外接口）
+ * Call an AI model by short alias.
  *
- * 完整流程：
- *   1. 在 MODEL_MAPPINGS 中查找模型简称对应的配置
- *   2. 解析配置（处理多配置列表的 enabled 选择）
- *   3. 检查 API 密钥是否已配置
- *   4. 合并默认参数和调用方覆盖参数
- *   5. 处理特定提供商的特殊逻辑（如 OpenRouter 的额外 headers）
- *   6. 调用 llm_client.chat() 发起实际的 API 请求
+ * Flow:
+ *   1. Find the alias in MODEL_MAPPINGS.
+ *   2. Resolve the active provider config.
+ *   3. Route mock models to mock_llm.ts.
+ *   4. Validate that an API key is configured.
+ *   5. Merge call-time options over model defaults.
+ *   6. Add provider-specific options, such as OpenRouter attribution headers.
+ *   7. Call llm_client.chat().
  *
- * 使用示例：
- *   const result = await callModel("gpt4", "请解释量子计算");
- *   console.log(result.content);  // AI 的回复文本
- *   console.log(result.usage);    // token 用量统计
- *
- * 参数覆盖优先级（高 → 低）：
- *   callModel 的 temperature/maxTokens 参数 → models.yaml 中的配置值 → 默认值(0.7/2000)
- *
- * @param modelAlias  模型简称，如 "gpt4"、"kimi"、"claude"
- * @param prompt      用户输入的提示文本
- * @param temperature 温度参数（可选，覆盖 models.yaml 中的默认值）
- * @param maxTokens   最大生成 token 数（可选，覆盖 models.yaml 中的默认值）
- * @returns LlmResult 包含 content（回复文本）和 usage（token 用量）
- * @throws Error 模型简称不存在、配置错误、密钥缺失、或 API 调用失败
+ * Option priority:
+ *   callModel arguments -> models.yaml values -> hard-coded defaults.
  */
 export async function callModel(
   modelAlias: string,
@@ -444,58 +310,38 @@ export async function callModel(
   maxTokens?: number,
   timeout?: number
 ): Promise<LlmResult> {
-  // 第一步：查找模型配置
   const entry = MODEL_MAPPINGS[modelAlias];
   if (entry === undefined) {
-    // 模型简称不存在，列出所有可用简称帮助用户排查
     const availableModels = Object.keys(MODEL_MAPPINGS).join(", ");
     throw new Error(
-      `未知的模型简称: '${modelAlias}'\n可用的模型: ${availableModels}`
+      `Unknown model alias: '${modelAlias}'\nAvailable models: ${availableModels}`
     );
   }
 
-  // 第二步：解析出当前启用的配置（处理单配置/多配置列表）
   const config = resolveConfig(entry, modelAlias);
 
-  // 第三步（Mock 拦截）：自动检测 mock 模型
-  // 判断条件：模型简称以 "mock" 开头，或 provider 为 "mock"（满足任一即可）
-  // mock 模式不需要真实的 API 密钥和 URL，直接调用 mockLlmCall 生成模拟响应
-  // 工作流的其余逻辑（JSON 验证、成本统计、日志记录）仍然正常运行
   if (isMockModel(modelAlias, config.provider)) {
-    logger.info(`[Mock] 使用模拟模式: ${modelAlias} (${config.model_name})`);
-    // 从 config 中提取 mock_mappings 字段，构造 MockConfig
-    // mock_mappings 是 prompt → response 的精确映射表
-    // 该字段通过 SingleModelConfig 的 [key: string]: unknown 索引签名允许存在
+    logger.info(`[Mock] Using mock mode: ${modelAlias} (${config.model_name})`);
     const mockConfig: MockConfig = {
       mock_mappings: (config["mock_mappings"] as Record<string, string>) ?? {},
     };
     return mockLlmCall(prompt, mockConfig, modelAlias);
   }
 
-  // 第四步：检查 API 密钥
-  // 密钥可能为空的原因：${ENV_VAR} 占位符对应的环境变量未设置，替换结果为空字符串
   if (!config.api_key || config.api_key.trim() === "") {
     throw new Error(
-      `模型 '${modelAlias}' 的API密钥未配置或为空。\n` +
-        `提供商: ${config.provider}\n` +
-        `请在 .env 文件中设置对应的环境变量。`
+      `Model '${modelAlias}' API key is missing or empty.\n` +
+        `Provider: ${config.provider}\n` +
+        `Set the matching environment variable in your .env file.`
     );
   }
 
-  // 第五步：合并参数（调用方参数 → 配置文件参数 → 硬编码默认值）
-  // ?? 是空值合并运算符：左侧为 null 或 undefined 时使用右侧的值
   const finalTemperature = temperature ?? config.temperature ?? 0.7;
   const finalMaxTokens = maxTokens ?? config.max_tokens ?? 2000;
-  // 额外 API 参数（如思考模式开关），如果配置中未定义则为空对象
   const extraParams = config.extra_params ?? {};
 
-  logger.info(`调用模型: ${modelAlias} (${config.provider} / ${config.model_name})`);
+  logger.info(`Calling model: ${modelAlias} (${config.provider} / ${config.model_name})`);
 
-  // 第六步：处理 OpenRouter 特有的 HTTP 请求头
-  // OpenRouter 是一个 API 聚合平台，它要求请求中携带来源信息：
-  //   HTTP-Referer: 调用方的网站 URL（用于流量来源统计）
-  //   X-Title:      调用方的应用名称（显示在 OpenRouter 仪表盘中）
-  // 这些信息从环境变量读取，如果未设置则不添加
   let extraHeaders: Record<string, string> | undefined;
   if (config.provider === "openrouter") {
     const siteUrl = process.env["OPENROUTER_SITE_URL"] ?? "";
@@ -507,10 +353,6 @@ export async function callModel(
     }
   }
 
-  // 第七步：调用 llm_client.chat() 发起请求
-  // chat() 内部会调用 callLlmApi()，成功返回 LlmResult，失败抛出异常
-  // 构建 chat 调用参数
-  // timeout 只在调用方显式传入时才覆盖，否则使用 llm_client 的默认值（300秒）
   const chatOptions: LlmCallOptions = {
     temperature: finalTemperature,
     max_tokens: finalMaxTokens,
@@ -524,34 +366,21 @@ export async function callModel(
 }
 
 // ============================================================
-// 工具函数
+// Utility functions
 // ============================================================
 
 /**
- * 列出所有可用的模型简称（按字母排序）
- *
- * 使用示例：
- *   listModels()  → ["claude", "gpt4", "kimi"]
- *
- * @returns 模型简称数组
+ * List all available model aliases in stable alphabetical order.
  */
 export function listModels(): string[] {
   return Object.keys(MODEL_MAPPINGS).sort();
 }
 
 /**
- * 获取指定模型的详细信息（API 密钥已脱敏处理）
+ * Return the currently active config for a model alias with the API key masked.
  *
- * 返回该模型当前启用的完整配置，但 api_key 会被替换为 "***"（安全考虑）。
- * 对于多配置格式，自动解析并返回 enabled: true 的那个配置。
- *
- * 使用示例：
- *   getModelInfo("gpt4")
- *   → { provider: "openai", api_url: "...", api_key: "***", model_name: "gpt-4o", ... }
- *
- * @param modelAlias 模型简称
- * @returns 脱敏后的配置对象，或 null（模型不存在时）
- *          配置异常时返回 { error: "...", ... } 描述错误原因
+ * This function returns error objects instead of throwing for malformed
+ * multi-provider configs because it is mainly used for inspection/debugging.
  */
 export function getModelInfo(
   modelAlias: string
@@ -562,13 +391,11 @@ export function getModelInfo(
   let config: SingleModelConfig;
 
   if (Array.isArray(entry)) {
-    // 多配置格式：筛选 enabled: true 的条目
     const enabledConfigs = entry.filter((item) => item.enabled === true);
 
     if (enabledConfigs.length === 0) {
-      // 没有启用的配置，返回错误信息而非抛出异常（info 查询不应中断程序）
       return {
-        error: "没有启用的配置",
+        error: "No enabled config",
         available_providers: entry.map((item) => item.provider ?? "unknown"),
         total_configs: entry.length,
       };
@@ -576,41 +403,25 @@ export function getModelInfo(
 
     if (enabledConfigs.length > 1) {
       return {
-        error: "配置错误：有多个启用的配置",
+        error: "Config error: multiple enabled configs",
         enabled_providers: enabledConfigs.map((item) => item.provider ?? "unknown"),
       };
     }
 
     config = { ...enabledConfigs[0]! } as SingleModelConfig;
   } else {
-    // 字典格式：直接使用
     config = { ...entry } as SingleModelConfig;
   }
 
-  // 脱敏处理：将 API 密钥替换为 "***"，防止日志或调试信息中泄露密钥
-  config.api_key = config.api_key ? "***" : "未配置";
+  config.api_key = config.api_key ? "***" : "Not configured";
   return config as Record<string, unknown>;
 }
 
 /**
- * 动态添加自定义模型配置（运行时注册）
+ * Add a model alias at runtime.
  *
- * 直接修改内存中的 MODEL_MAPPINGS，不会写入 models.yaml 文件。
- * 适用于测试场景或需要临时添加模型的情况。
- *
- * 使用示例：
- *   addCustomModel("my-model", "openai", "https://api.openai.com/v1/chat/completions",
- *                  "sk-xxx", "gpt-4o-mini", 0.5, 4000);
- *   await callModel("my-model", "你好");  // 现在可以用 "my-model" 调用了
- *
- * @param alias       模型简称（用于后续调用）
- * @param provider    提供商名称
- * @param apiUrl      API 端点 URL
- * @param apiKey      API 密钥
- * @param modelName   模型全名
- * @param temperature 默认温度，默认 0.7
- * @param maxTokens   默认最大 token 数，默认 2000
- * @param extras      其他额外配置字段（如 pricing、extra_params 等）
+ * The new config is stored only in memory. It is useful for tests and temporary
+ * model registration, but it is not written back to models.yaml.
  */
 export function addCustomModel(
   alias: string,
@@ -622,8 +433,6 @@ export function addCustomModel(
   maxTokens = 2000,
   extras?: Partial<SingleModelConfig>
 ): void {
-  // 直接写入 MODEL_MAPPINGS 对象（字典格式，无需 enabled 字段）
-  // ...extras 展开运算符将额外字段合并到配置中
   MODEL_MAPPINGS[alias] = {
     provider,
     api_url: apiUrl,
@@ -633,21 +442,15 @@ export function addCustomModel(
     max_tokens: maxTokens,
     ...extras,
   };
-  logger.info(`添加自定义模型: ${alias}`);
+  logger.info(`Added custom model: ${alias}`);
 }
 
 /**
- * 获取模型的价格配置信息
+ * Return pricing metadata for a model alias.
  *
- * 用于 cost_calculator.ts 计算每次 API 调用的花费。
- * 对于多配置格式，返回当前启用配置的价格。
- *
- * 使用示例：
- *   getModelPricingInfo("gpt4")
- *   → { input: 2.5, output: 10.0, currency: "USD" }
- *
- * @param modelAlias 模型简称
- * @returns ModelPricing 价格信息，或 null（模型不存在或未配置价格时）
+ * For the array shape, the currently enabled provider config is used. If the
+ * config is ambiguous, this helper logs a warning and returns the first enabled
+ * config's pricing to preserve the old non-throwing behavior.
  */
 export function getModelPricingInfo(modelAlias: string): ModelPricing | null {
   const entry = MODEL_MAPPINGS[modelAlias];
@@ -656,41 +459,32 @@ export function getModelPricingInfo(modelAlias: string): ModelPricing | null {
   let config: SingleModelConfig;
 
   if (Array.isArray(entry)) {
-    // 多配置格式：筛选启用的配置
     const enabledConfigs = entry.filter((item) => item.enabled === true);
 
     if (enabledConfigs.length === 0) {
-      logger.warning(`模型 '${modelAlias}' 没有启用的配置`);
+      logger.warning(`Model '${modelAlias}' has no enabled config`);
       return null;
     }
 
     if (enabledConfigs.length > 1) {
-      // 有多个启用的配置时，使用第一个（这里不报错，只是查询价格）
-      logger.warning(`模型 '${modelAlias}' 有多个启用的配置，使用第一个`);
+      logger.warning(`Model '${modelAlias}' has multiple enabled configs; using the first one`);
     }
 
-    config = enabledConfigs[0]!; // length 已确认 ≥ 1，! 非空断言安全
+    config = enabledConfigs[0]!;
   } else {
     config = entry;
   }
 
-  // 返回价格信息，如果配置中没有 pricing 字段则返回 null
-  // ?? 空值合并：pricing 为 undefined 时返回 null
   return config.pricing ?? null;
 }
 
 /**
- * 重新从 models.yaml 加载模型配置（热重载）
+ * Reload model mappings from models.yaml.
  *
- * 修改 models.yaml 后调用此函数即可生效，无需重启进程。
- * 会完全覆盖当前的 MODEL_MAPPINGS（包括通过 addCustomModel 动态添加的配置）。
- *
- * 使用场景：
- *   - 运行时修改了 models.yaml（如切换提供商、更新密钥）
- *   - 管理后台提供"重载配置"按钮
+ * This replaces all current mappings, including anything added by
+ * addCustomModel().
  */
 export function reloadModels(): void {
-  // 重新执行 loadModelMappings()，覆盖全局变量
   MODEL_MAPPINGS = loadModelMappings();
-  logger.info(`模型配置已重新加载，共 ${Object.keys(MODEL_MAPPINGS).length} 个模型`);
+  logger.info(`Model config reloaded; ${Object.keys(MODEL_MAPPINGS).length} models available`);
 }
