@@ -240,6 +240,7 @@ export class LLMCallAction extends BaseAction {
    * @param jsonRetryMaxAttempts JSON 验证重试次数，默认 3
    * @param jsonRetryEnhancePrompt 重试时是否增强提示词，默认 false
    * @param config              额外配置（可包含 validator、validator_config 等）
+   * @param name                动作名称（用于日志输出）
    */
   constructor(
     model: string,
@@ -255,10 +256,10 @@ export class LLMCallAction extends BaseAction {
     jsonRules?: Record<string, unknown>,
     jsonRetryMaxAttempts = 3,
     jsonRetryEnhancePrompt = false,
-    config: Record<string, unknown> = {}
+    config: Record<string, unknown> = {},
+    name?: string
   ) {
-    // 调用父类构造函数，name 传 undefined（使用默认的类名 "LLMCallAction"）
-    super(undefined, config);
+    super(name, config);
 
     // 防御性检查：validateJson 必须显式传入
     // 为什么不用默认值 false？因为忘记配置 validateJson 的 bug 很难排查——

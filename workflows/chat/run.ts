@@ -1,51 +1,51 @@
 /**
- * 简单对话工作流启动器
+ * Simple chat workflow runner
  *
- * 使用方法：
+ * Usage:
  *   npx tsx workflows/chat/run.ts
  */
 
-// dotenv：从 .env 文件加载环境变量（API 密钥等）
+// dotenv loads environment variables, such as API keys, from a local .env file.
 import "dotenv/config";
 
-// path：Node.js 内置路径处理模块，用于定位同目录下的 workflow.yaml
+// path is Node.js's built-in path helper, used here to locate simple.yaml next to this file.
 import path from "path";
 
-// fileURLToPath：将 import.meta.url（file:// 协议 URL）转换为普通文件路径
-// 用法：fileURLToPath(import.meta.url) → 当前文件的绝对路径
+// fileURLToPath converts import.meta.url, a file:// URL, into a normal filesystem path.
+// Example: fileURLToPath(import.meta.url) returns the absolute path of the current file.
 import { fileURLToPath } from "url";
 
-// WorkflowRunner：工作流一键启动器，封装了加载 YAML、创建引擎、执行、打印报告的完整流程
+// WorkflowRunner wraps the full flow: load YAML, create the engine, run steps, and print a report.
 import { WorkflowRunner } from "../../src/core/workflow_runner.js";
 
 // ============================================================
-// 配置区：按需修改
+// Configuration
 // ============================================================
 
-// MODEL：使用的模型简称，需与 models.yaml 中的 key 一致
-const MODEL = "gpt35";
+// MODEL is the short model alias. It must match a key in models.yaml.
+const MODEL = "fast";
 
-// USER_INPUT：发送给模型的提示词
-const USER_INPUT = "你好，用一句话介绍一下你自己。";
+// USER_INPUT is the prompt sent to the model.
+const USER_INPUT = "Hello. Please introduce yourself in one sentence.";
 
 // ============================================================
-// 主函数
+// Main function
 // ============================================================
 
 async function main(): Promise<void> {
-  // 第一步：定位当前文件所在目录，拼接 simple.yaml 的路径
-  // import.meta.url 返回当前模块的 URL（如 file:///D:/xxx/run.ts）
-  // fileURLToPath 将其转换为系统路径（如 D:/xxx/run.ts）
-  // path.dirname 取其目录部分（如 D:/xxx/）
+  // Step 1: Locate the directory of this file and build the path to simple.yaml.
+  // import.meta.url returns the current module URL, such as file:///D:/xxx/run.ts.
+  // fileURLToPath converts that URL into a system path, such as D:/xxx/run.ts.
+  // path.dirname returns only the directory part, such as D:/xxx/.
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const yamlPath = path.join(__dirname, "simple.yaml");
 
-  // 第二步：从 YAML 创建 WorkflowRunner 实例
+  // Step 2: Create a WorkflowRunner instance from the YAML file.
   const runner = await WorkflowRunner.fromYaml(yamlPath);
 
-  // 第三步：执行工作流，传入初始数据
-  // simple.yaml 中的 prompt 字段引用 {user_input}，model 字段引用 {model}
-  // 这些变量通过 inputData 传入，引擎会自动替换模板占位符
+  // Step 3: Run the workflow with initial data.
+  // simple.yaml references {user_input} in prompt and {model} in model.
+  // These values are passed through inputData, and the engine replaces the template placeholders.
   const result = await runner.run({
     inputData: {
       user_input: USER_INPUT,
@@ -53,9 +53,9 @@ async function main(): Promise<void> {
     },
   });
 
-  // 第四步：根据结果退出
+  // Step 4: Exit with an error code when the workflow fails.
   if (result.status === "failed") {
-    console.error(`工作流执行失败: ${result.error}`);
+    console.error(`Workflow failed: ${result.error}`);
     process.exit(1);
   }
 }
