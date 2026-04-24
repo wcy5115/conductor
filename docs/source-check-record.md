@@ -20,6 +20,7 @@ Date started: 2026-04-23
 | `src/workflow_engine.ts` | Checked | 2026-04-23 | Start-node and action-name logging bugs fixed; tracked Chinese text translated to English. |
 | `src/core/workflow_runner.ts` | Checked | 2026-04-23 | Related start-node bug fixed; tracked Chinese text translated to English. |
 | `src/workflow_actions/llm_actions.ts` | Checked | 2026-04-23 | Multimodal prompt interpolation bug fixed; tracked Chinese text translated to English. |
+| `src/workflow_actions/io_actions.ts` | Checked | 2026-04-24 | Merge action empty-input result-shape bug fixed; tracked Chinese text translated to English. |
 
 Status values: `Planned`, `Checking`, `Checked`, `Needs follow-up`.
 
@@ -60,6 +61,10 @@ Record bugs here immediately after checking each file.
 
 - Fixed on 2026-04-23: the multimodal branch now renders prompt templates with `context.data` before calling the model. It keeps instruction lines that contain `{item}`, replaces other placeholders, and omits only the raw image-path value from the text prompt.
 
+### `src/workflow_actions/io_actions.ts`
+
+- Fixed on 2026-04-24: `MergeJsonFilesAction` now keeps a stable result shape on empty-input branches. When the input directory is missing or no files match, it still returns `${outputKey}_count` and `${outputKey}_file`, and it writes an empty output JSON file so downstream steps can use a real file path.
+
 ## Chinese Text Found
 
 Record Chinese comments, strings, prompts, and user-facing text here before translating them.
@@ -94,6 +99,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/workflow_actions/llm_actions.ts`
 
 - Translated on 2026-04-23: tracked comments, examples, log messages, thrown error messages, and JSON-retry prompt text in this file were translated to English.
+
+### `src/workflow_actions/io_actions.ts`
+
+- Translated on 2026-04-24: tracked comments, default strings, log messages, and thrown error messages in this file were translated to English.
 
 ## Check Log
 
@@ -148,6 +157,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Chinese text details: see `Chinese Text Found` > `src/workflow_actions/llm_actions.ts`.
 - Follow-up needed: none for the tracked `llm_actions.ts` work.
 
+### 2026-04-24 - `src/workflow_actions/io_actions.ts`
+
+- Checked `SaveDataAction`, `LogAction`, `ReadFileAction`, and `MergeJsonFilesAction`, with extra attention on result-shape consistency and user-facing strings.
+- Bug details: see `Bugs Found` > `src/workflow_actions/io_actions.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/workflow_actions/io_actions.ts`.
+- Follow-up needed: none for the tracked `io_actions.ts` work.
+
 ## Verification
 
 - `npm.cmd run typecheck` passed.
@@ -172,3 +188,8 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]"` returned no matches in `src/workflow_actions/llm_actions.ts` after the tracked language cleanup.
 - `npm.cmd run typecheck` passed after the `src/workflow_actions/llm_actions.ts` multimodal prompt fix.
 - `npm.cmd test -- llm_actions` passed after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `npm.cmd run typecheck` passed after the `src/workflow_actions/io_actions.ts` merge result-shape fix.
+- `npm.cmd test -- io_actions` passed with 2 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]"` returned no matches in `src/workflow_actions/io_actions.ts` and `tests/io_actions.test.ts` after the tracked language cleanup.
+- `npm.cmd run typecheck` passed after translating the tracked `src/workflow_actions/io_actions.ts` text to English.
+- `npm.cmd test -- io_actions` passed with 2 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
