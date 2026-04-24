@@ -19,6 +19,7 @@ Date started: 2026-04-23
 | `src/workflow_parser.ts` | Checked | 2026-04-23 | Parser validation bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_engine.ts` | Checked | 2026-04-23 | Start-node and action-name logging bugs fixed; tracked Chinese text translated to English. |
 | `src/core/workflow_runner.ts` | Checked | 2026-04-23 | Related start-node bug fixed; tracked Chinese text translated to English. |
+| `src/workflow_actions/llm_actions.ts` | Checked | 2026-04-23 | Multimodal prompt interpolation bug fixed; tracked Chinese text translated to English. |
 
 Status values: `Planned`, `Checking`, `Checked`, `Needs follow-up`.
 
@@ -55,6 +56,10 @@ Record bugs here immediately after checking each file.
 
 - Fixed on 2026-04-23: `WorkflowRunner.run()` forced `startStep: "1"`, bypassing the engine's `workflowGraph.startNode` default for YAML workflows whose first node is not `1`.
 
+### `src/workflow_actions/llm_actions.ts`
+
+- Fixed on 2026-04-23: the multimodal branch now renders prompt templates with `context.data` before calling the model. It keeps instruction lines that contain `{item}`, replaces other placeholders, and omits only the raw image-path value from the text prompt.
+
 ## Chinese Text Found
 
 Record Chinese comments, strings, prompts, and user-facing text here before translating them.
@@ -85,6 +90,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/core/workflow_runner.ts`
 
 - Translated on 2026-04-23: tracked comments and user-facing logs/errors in this file were translated to English.
+
+### `src/workflow_actions/llm_actions.ts`
+
+- Translated on 2026-04-23: tracked comments, examples, log messages, thrown error messages, and JSON-retry prompt text in this file were translated to English.
 
 ## Check Log
 
@@ -132,6 +141,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Chinese text details: see `Chinese Text Found` > `src/core/workflow_runner.ts`.
 - Follow-up needed: none for the start-node path.
 
+### 2026-04-23 - `src/workflow_actions/llm_actions.ts`
+
+- Checked `LLMCallAction` and `ConditionalLLMAction`, with extra attention on multimodal prompt handling, JSON-retry behavior, and user-facing strings.
+- Bug details: see `Bugs Found` > `src/workflow_actions/llm_actions.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/workflow_actions/llm_actions.ts`.
+- Follow-up needed: none for the tracked `llm_actions.ts` work.
+
 ## Verification
 
 - `npm.cmd run typecheck` passed.
@@ -153,3 +169,6 @@ Add one entry per checked file. Each entry should record what was checked and po
   - `npm.cmd test -- workflow_loader` passed after translating tracked loader strings.
   - `npm.cmd test -- workflow_runner` passed after translating tracked runner strings.
   - `npm.cmd run typecheck` passed after the tracked language cleanup.
+- `rg -n "[\p{Han}]"` returned no matches in `src/workflow_actions/llm_actions.ts` after the tracked language cleanup.
+- `npm.cmd run typecheck` passed after the `src/workflow_actions/llm_actions.ts` multimodal prompt fix.
+- `npm.cmd test -- llm_actions` passed after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
