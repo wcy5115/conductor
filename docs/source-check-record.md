@@ -21,6 +21,7 @@ Date started: 2026-04-23
 | `src/core/workflow_runner.ts` | Checked | 2026-04-23 | Related start-node bug fixed; tracked Chinese text translated to English. |
 | `src/workflow_actions/llm_actions.ts` | Checked | 2026-04-23 | Multimodal prompt interpolation bug fixed; tracked Chinese text translated to English. |
 | `src/workflow_actions/io_actions.ts` | Checked | 2026-04-24 | Merge action empty-input result-shape bug fixed; tracked Chinese text translated to English. |
+| `src/workflow_actions/data_actions.ts` | Checked | 2026-04-24 | Processor output validation bug fixed; tracked comments translated to English and cleaned up from corrupted encoding. |
 
 Status values: `Planned`, `Checking`, `Checked`, `Needs follow-up`.
 
@@ -65,6 +66,10 @@ Record bugs here immediately after checking each file.
 
 - Fixed on 2026-04-24: `MergeJsonFilesAction` now keeps a stable result shape on empty-input branches. When the input directory is missing or no files match, it still returns `${outputKey}_count` and `${outputKey}_file`, and it writes an empty output JSON file so downstream steps can use a real file path.
 
+### `src/workflow_actions/data_actions.ts`
+
+- Fixed on 2026-04-24: `DataProcessAction.execute()` now validates custom processor output before constructing the step result. Non-object returns such as `null` or arrays now throw a direct validation error instead of failing later with unclear runtime errors.
+
 ## Chinese Text Found
 
 Record Chinese comments, strings, prompts, and user-facing text here before translating them.
@@ -103,6 +108,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/workflow_actions/io_actions.ts`
 
 - Translated on 2026-04-24: tracked comments, default strings, log messages, and thrown error messages in this file were translated to English.
+
+### `src/workflow_actions/data_actions.ts`
+
+- Translated on 2026-04-24: tracked comments in this file were rewritten in English, and the previously mojibake comment text was removed.
 
 ## Check Log
 
@@ -164,6 +173,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Chinese text details: see `Chinese Text Found` > `src/workflow_actions/io_actions.ts`.
 - Follow-up needed: none for the tracked `io_actions.ts` work.
 
+### 2026-04-24 - `src/workflow_actions/data_actions.ts`
+
+- Checked `DataProcessAction` and `ConditionalBranchAction`, with extra attention on custom function outputs, branch routing, and comment text state.
+- Bug details: see `Bugs Found` > `src/workflow_actions/data_actions.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/workflow_actions/data_actions.ts`.
+- Follow-up needed: none for the tracked `data_actions.ts` work.
+
 ## Verification
 
 - `npm.cmd run typecheck` passed.
@@ -193,3 +209,9 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]"` returned no matches in `src/workflow_actions/io_actions.ts` and `tests/io_actions.test.ts` after the tracked language cleanup.
 - `npm.cmd run typecheck` passed after translating the tracked `src/workflow_actions/io_actions.ts` text to English.
 - `npm.cmd test -- io_actions` passed with 2 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `npm.cmd run typecheck` passed after the `src/workflow_actions/data_actions.ts` processor-output validation fix.
+- `npm.cmd test -- data_actions` passed with 2 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n --pcre2 "[^\x00-\x7F]"` returned no matches in `src/workflow_actions/data_actions.ts` and `tests/data_actions.test.ts` after the tracked English cleanup.
+- `rg -n "[\p{Han}]"` returned no matches in `src/workflow_actions/data_actions.ts` and `tests/data_actions.test.ts` after the tracked English cleanup.
+- `npm.cmd run typecheck` passed after translating the tracked `src/workflow_actions/data_actions.ts` comments to English.
+- `npm.cmd test -- data_actions` passed with 2 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
