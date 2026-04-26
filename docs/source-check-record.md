@@ -23,6 +23,7 @@ Date started: 2026-04-23
 | `src/workflow_actions/io_actions.ts` | Checked | 2026-04-24 | Merge action empty-input result-shape bug fixed; tracked Chinese text translated to English. |
 | `src/workflow_actions/data_actions.ts` | Checked | 2026-04-24 | Processor output validation bug fixed; tracked comments translated to English and cleaned up from corrupted encoding. |
 | `src/workflow_actions/pdf_actions.ts` | Needs follow-up | 2026-04-24 | Result file list/count still ignores the current `page_range`; tracked comments and user-facing strings were translated to English. |
+| `src/pdf_to_images.ts` | Checked | 2026-04-25 | Page-range start validation bug fixed; tracked comments and user-facing strings translated to English. |
 
 Status values: `Planned`, `Checking`, `Checked`, `Needs follow-up`.
 
@@ -75,6 +76,10 @@ Record bugs here immediately after checking each file.
 
 - `PDFToImagesAction.execute()` currently scans the whole output directory for `page_XXXX.jpg` files after conversion and returns every match. If `page_range` targets only part of a PDF, or the directory already contains images from an earlier run, `${outputKey}_files` and `${outputKey}_count` can include stale pages that were not requested in the current step.
 
+### `src/pdf_to_images.ts`
+
+- Fixed on 2026-04-25: `parsePageRange()` now rejects range expressions whose start page is greater than the PDF page count. For example, with a 10-page PDF, `11-20` now throws a direct validation error instead of finishing successfully with no generated pages.
+
 ## Chinese Text Found
 
 Record Chinese comments, strings, prompts, and user-facing text here before translating them.
@@ -121,6 +126,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/workflow_actions/pdf_actions.ts`
 
 - Translated on 2026-04-24: tracked comments, the default action name string, the template-resolution error message, and the progress log messages were translated to English.
+
+### `src/pdf_to_images.ts`
+
+- Translated on 2026-04-25: tracked comments, user-facing log messages, and thrown error messages were translated to English.
 
 ## Check Log
 
@@ -196,6 +205,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Chinese text details: see `Chinese Text Found` > `src/workflow_actions/pdf_actions.ts`.
 - Follow-up needed: the returned file list/count still needs a future fix so it reflects the current requested pages; tracked text translation is done.
 
+### 2026-04-25 - `src/pdf_to_images.ts`
+
+- Checked `isImageValid()`, `parsePageRange()`, and `convertPdfToImages()`, with extra attention on page-range validation, resume behavior, output file naming, and user-facing text state.
+- Bug details: see `Bugs Found` > `src/pdf_to_images.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/pdf_to_images.ts`.
+- Follow-up needed: none for the tracked `src/pdf_to_images.ts` work.
+
 ## Verification
 
 - `npm.cmd run typecheck` passed.
@@ -233,3 +249,8 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `npm.cmd test -- data_actions` passed with 2 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
 - `rg -n "[\p{Han}]"` returned no matches in `src/workflow_actions/pdf_actions.ts` or the updated `docs/source-check-record.md` entry after the tracked `pdf_actions.ts` English cleanup.
 - `npm.cmd run typecheck` passed after translating the tracked `src/workflow_actions/pdf_actions.ts` comments and user-facing strings to English.
+- `npm.cmd run typecheck` passed after fixing the `src/pdf_to_images.ts` page-range start validation bug.
+- `npm.cmd test -- pdf_to_images` passed with 1 test after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]"` returned no matches in `src/pdf_to_images.ts` and `tests/pdf_to_images.test.ts` after the tracked English cleanup.
+- `npm.cmd run typecheck` passed after translating the tracked `src/pdf_to_images.ts` comments and user-facing strings to English.
+- `npm.cmd test -- pdf_to_images` passed with 1 test after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
