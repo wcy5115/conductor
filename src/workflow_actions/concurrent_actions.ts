@@ -1,43 +1,38 @@
 /**
- * 并发编排动作
+ * Concurrent orchestration action.
  *
- * ConcurrentAction 是工作流中的"并发编排器"：
- * 把一批 item（如待翻译的页面列表）分发给子步骤（LLM 调用、文件读取等）并行处理，
- * 最终收集所有结果和成本信息。
+ * ConcurrentAction is the workflow-level concurrent orchestrator.
+ * It dispatches a batch of items, such as pages to translate, to sub-steps
+ * such as LLM calls or file reads, then collects results and cost data.
  *
- * 底层并发执行器由 concurrent_utils.ts 的 concurrentProcess() 提供，
- * 本模块负责上层编排逻辑：创建子上下文、调度子步骤、断点续存、原子写文件、成本汇总。
+ * concurrentProcess() in concurrent_utils.ts provides the lower-level runner.
+ * This module handles orchestration: child contexts, sub-step dispatch,
+ * resume checks, atomic file writes, and cost aggregation.
  */
 
-// fs 是 Node.js 内置的文件系统模块，用于创建目录、写入文件、检查文件是否存在
+// Node's file-system module, used for directories, writes, and existence checks.
 import fs from "fs";
-// path 是 Node.js 内置的路径处理模块，用于路径拼接（path.join）和取目录名（path.dirname）
+// Node's path module, used for path joins and directory names.
 import path from "path";
-// WorkflowContext 是工作流的全局上下文，context.data 是步骤间共享的数据容器
-// StepResult 是每个步骤执行完毕后的返回值，包含：下一步名称、新数据、元数据
+// WorkflowContext stores shared workflow data. StepResult carries the next
+// step name, produced data, and metadata after each action finishes.
 import { WorkflowContext, StepResult } from "../workflow_engine.js";
-// BaseAction 是所有动作的抽象基类，提供 run(context) 模板方法，子类只需实现 execute()
+// BaseAction provides the shared run(context) wrapper around execute().
 import { BaseAction } from "./base.js";
-// concurrentProcess 是底层并发执行引擎，支持渐进式派发、熔断器、进度跟踪
-// ProcessStats 是执行统计结果，包含 success/failed/skipped 计数和每个 item 的详细结果
+// concurrentProcess is the lower-level concurrent runner. ProcessStats records
+// success, failed, skipped counts, and per-item results.
 import { concurrentProcess, ProcessStats } from "../concurrent_utils.js";
-// aggregateCosts 将多个 CostResult 对象汇总为一个（求和 tokens 和费用）
-// CostResult 是成本信息接口，包含 input/output tokens、费用、是否有定价等字段
+// aggregateCosts combines CostResult values by summing token and cost fields.
 import { aggregateCosts, CostResult } from "../cost_calculator.js";
-// LLMValidationError 是 LLM 验证失败时抛出的异常，携带 cost_info，
-// 确保即使验证失败也能正确统计已消耗的 API 成本
+// LLMValidationError carries cost_info so failed validation attempts can still
+// be included in API cost accounting.
 import { LLMValidationError } from "../exceptions.js";
-// LLMCallAction 是 LLM 调用动作，作为子步骤工厂的可选类型之一
+// LLMCallAction is one supported sub-step type.
 import { LLMCallAction } from "./llm_actions.js";
-// ReadFileAction 是读取文件动作，作为子步骤工厂的可选类型之一
+// ReadFileAction is one supported sub-step type.
 import { ReadFileAction } from "./io_actions.js";
-// deepGet 从嵌套对象中按点路径取值，如 "result.text" → obj.result.text
-// safeGetCostInfo 安全提取成本信息，兼容多种字段命名，缺失字段自动补零
-// createZeroCostInfo 创建全零的成本信息字典，用作默认值
-// formatErrorContext 将异常、索引、item 等拼成一行可读的错误日志字符串
-// isValidOutputFile 根据文件扩展名选择验证策略（JSON 做解析验证，其他只检查非空），用于断点续存
-// atomicWriteFileSync 先写 .tmp 再 rename，避免中断产生半截文件
-// formatPathTemplate 将路径模板中的 {key} / {key:04d} 占位符替换为实际值
+// Shared helpers for nested data access, cost extraction, error formatting,
+// resume validation, atomic writes, and path-template expansion.
 import {
   deepGet,
   safeGetCostInfo,
@@ -48,8 +43,8 @@ import {
   formatPathTemplate,
 } from "./utils.js";
 
-// 简易日志对象：把 console.xxx 包一层，各模块统一用 logger.info() 而非直接 console.info()
-// 注意：这与 core/logging.ts 的 StructuredLogger 无关，后者是工作流级别的业务日志
+// Lightweight logger wrapper. This is separate from core/logging.ts,
+// which handles workflow-level structured logs.
 const logger = {
   info: (msg: string) => console.info(msg),
   warn: (msg: string) => console.warn(msg),
@@ -58,98 +53,99 @@ const logger = {
 };
 
 // ============================================================
-// 接口定义
+// Interfaces
 // ============================================================
 
 /**
- * 保存到文件的配置
+ * Configuration for saving each item result to a file.
  *
- * 并发处理的每个 item 结果可选择写入独立的 JSON 文件，
- * 此接口定义了输出目录、文件名模板和要保存的数据键名。
+ * Each concurrently processed item can optionally be written to its own file.
+ * This interface defines the output directory, filename template, and data key.
  *
- * 使用示例（YAML 配置）：
+ * YAML example:
  *   save_to_file:
  *     output_dir: "output/{book_name}/pages"
  *     filename_template: "page_{index:04d}.json"
  *     data_key: "result"
  */
 export interface SaveToFileConfig {
-  /** 输出目录路径模板，支持 {key} 占位符，例如 "output/{book_name}/pages" */
+  /** Output directory template. Supports placeholders such as "output/{book_name}/pages". */
   output_dir: string;
-  /** 文件名模板，支持 {index:04d} 零补全格式，例如 "page_{index:04d}.json" */
+  /** Filename template. Supports zero-padding formats such as "page_{index:04d}.json". */
   filename_template: string;
-  /** 从子步骤结果的 context.data 中取哪个键的值来保存，例如 "result" */
+  /** Key to read from the child step's context.data before saving, such as "result". */
   data_key: string;
 }
 
 /**
- * 子步骤配置
+ * Sub-step configuration.
  *
- * 描述并发处理中每个 item 需要执行的子步骤。
- * type 字段决定创建哪种 Action 实例，其他字段是该类型的参数。
+ * Describes the sub-step to run for each item in the concurrent batch.
+ * The type field selects the Action implementation; the other fields are
+ * parameters for that action type.
  *
- * 支持的 type 值：
- *   - "llm_call"      → 创建 LLMCallAction（调用 LLM 处理 item）
- *   - "read_file"     → 创建 ReadFileAction（读取文件内容）
- *   - "data_process"  → 暂不支持（Python 版用 eval 执行，TS 中不安全）
+ * Supported type values:
+ *   - "llm_call"      -> creates LLMCallAction
+ *   - "read_file"     -> creates ReadFileAction
+ *   - "data_process"  -> not supported because Python-style eval is unsafe in TS
  */
 export interface ActionConfig {
-  /** 子步骤类型："llm_call" | "read_file" | "data_process" */
+  /** Sub-step type: "llm_call" | "read_file" | "data_process". */
   type: string;
-  /** LLM 模型名称（仅 llm_call 类型使用） */
+  /** LLM model name, used only by llm_call. */
   model?: string;
-  /** Prompt 模板字符串（仅 llm_call 类型使用） */
+  /** Prompt template, used only by llm_call. */
   prompt_template?: string;
-  /** 是否验证 JSON 格式输出（仅 llm_call 类型使用） */
+  /** Whether to validate JSON output, used only by llm_call. */
   validate_json?: boolean;
-  /** JSON 必填字段列表（仅 llm_call 类型使用） */
+  /** Required JSON fields, used only by llm_call. */
   required_fields?: string[];
-  /** JSON 验证规则（仅 llm_call 类型使用） */
+  /** JSON validation rules, used only by llm_call. */
   json_rules?: Record<string, unknown>;
-  /** JSON 重试最大次数（仅 llm_call 类型使用） */
+  /** Maximum JSON retry attempts, used only by llm_call. */
   json_retry_max_attempts?: number;
-  /** JSON 重试时是否增强 prompt（仅 llm_call 类型使用） */
+  /** Whether to enhance prompts during JSON retries, used only by llm_call. */
   json_retry_enhance_prompt?: boolean;
-  /** 文件路径模板（仅 read_file 类型使用） */
+  /** File path template, used only by read_file. */
   path_template?: string;
-  /** 输出键名（子步骤结果存入 context.data 的键名） */
+  /** Output key where the sub-step stores its result in context.data. */
   output_key?: string;
-  /** 温度参数（仅 llm_call 类型使用） */
+  /** Temperature, used only by llm_call. */
   temperature?: number;
-  /** 最大 token 数（仅 llm_call 类型使用） */
+  /** Maximum token count, used only by llm_call. */
   max_tokens?: number;
-  /** API 调用超时时间秒数（仅 llm_call 类型使用） */
+  /** API timeout in seconds, used only by llm_call. */
   timeout?: number;
-  /** 文件编码（仅 read_file 类型使用） */
+  /** File encoding, used only by read_file. */
   encoding?: string;
-  /** 文件不存在时是否容忍（仅 read_file 类型使用） */
+  /** Whether a missing file is allowed, used only by read_file. */
   missing_ok?: boolean;
-  /** 其他扩展配置项（如 validator、validator_config 等） */
+  /** Additional extension settings, such as validator and validator_config. */
   [key: string]: unknown;
 }
 
 // ============================================================
-// 工厂函数
+// Factory Function
 // ============================================================
 
 /**
- * 根据配置创建子步骤 Action 实例
+ * Creates a sub-step Action from configuration.
  *
- * 这是一个工厂函数，根据 config.type 字段决定创建哪种 Action：
- *   - "llm_call"      → LLMCallAction（调用 LLM）
- *   - "read_file"     → ReadFileAction（读取文件）
- *   - "data_process"  → 暂不支持，抛出错误
+ * The config.type field selects which Action to create:
+ *   - "llm_call"      -> LLMCallAction
+ *   - "read_file"     -> ReadFileAction
+ *   - "data_process"  -> unsupported and throws
  *
- * @param config     子步骤配置（从 YAML 的 process_steps 中读取）
- * @param workflowDir 工作流 YAML 所在目录，用于解析相对路径
- * @returns 可执行的 BaseAction 实例
- * @throws Error 未知的 type 或暂不支持的 type
+ * @param config Sub-step config read from YAML process_steps.
+ * @param workflowDir Directory containing the workflow YAML, for relative paths.
+ * @returns Executable BaseAction instance.
+ * @throws Error for unknown or unsupported types.
  *
- * 使用示例：
+ * Example:
  *   const action = _createActionFromConfig({
  *     type: "llm_call",
  *     model: "deepseek-chat",
- *     prompt_template: "翻译以下内容：{item}",
+ *     prompt_template: "Translate this content: {item}",
  *     validate_json: true,
  *   });
  */
@@ -157,21 +153,21 @@ function _createActionFromConfig(
   config: ActionConfig,
   _workflowDir?: string
 ): BaseAction {
-  // 取出子步骤类型，决定创建哪种 Action
+  // Read the sub-step type to decide which Action to create.
   const actionType = config.type;
 
   if (actionType === "llm_call") {
-    // ====== LLM 调用子步骤 ======
-    // 必填字段检查：model 和 prompt_template 缺一不可
+    // LLM sub-step.
+    // model and prompt_template are required.
     if (!config.model) {
-      throw new Error("llm_call 子步骤缺少必填字段 'model'");
+      throw new Error("llm_call sub-step is missing required field 'model'");
     }
     if (!config.prompt_template) {
-      throw new Error("llm_call 子步骤缺少必填字段 'prompt_template'");
+      throw new Error("llm_call sub-step is missing required field 'prompt_template'");
     }
 
-    // 构建传给 LLMCallAction 的额外配置（validator 相关字段）
-    // 这些字段不在 LLMCallAction 构造函数的显式参数中，而是通过 config 字典传入
+    // Build extra validator-related config for LLMCallAction.
+    // These fields are passed through the config object rather than explicit constructor args.
     const extraConfig: Record<string, unknown> = {};
     if (config.validator) extraConfig["validator"] = config.validator;
     if (config.validator_config) extraConfig["validator_config"] = config.validator_config;
@@ -179,81 +175,80 @@ function _createActionFromConfig(
     return new LLMCallAction(
       config.model,
       config.prompt_template,
-      config.output_key ?? "result",       // 子步骤结果存入 context.data 的键名
-      "END",                                // nextStep 固定为 "END"，因为子步骤不需要链式跳转
-      config.validate_json ?? false,        // 是否验证 JSON 格式
-      config.temperature,                   // 温度参数（可选）
-      config.max_tokens,                    // 最大 token 数（可选）
-      config.timeout as number | undefined, // API 超时时间（可选）
-      config.required_fields,               // JSON 必填字段列表（可选）
-      config.json_rules,                    // JSON 验证规则（可选）
-      config.json_retry_max_attempts ?? 3,  // JSON 重试最大次数
-      config.json_retry_enhance_prompt ?? false, // 重试时是否增强 prompt
-      extraConfig,                          // 额外配置（validator 等）
+      config.output_key ?? "result",
+      "END",
+      config.validate_json ?? false,
+      config.temperature,
+      config.max_tokens,
+      config.timeout as number | undefined,
+      config.required_fields,
+      config.json_rules,
+      config.json_retry_max_attempts ?? 3,
+      config.json_retry_enhance_prompt ?? false,
+      extraConfig,
     );
   }
 
   if (actionType === "read_file") {
-    // ====== 文件读取子步骤 ======
+    // File-reading sub-step.
     if (!config.path_template) {
-      throw new Error("read_file 子步骤缺少必填字段 'path_template'");
+      throw new Error("read_file sub-step is missing required field 'path_template'");
     }
 
     return new ReadFileAction(
       config.path_template,
-      config.output_key ?? "file_content", // 读取内容存入的键名
+      config.output_key ?? "file_content",
       (config.encoding as BufferEncoding) ?? "utf-8",
-      config.missing_ok ?? false,          // 文件不存在时是否容忍
-      "END",                                // nextStep 固定为 "END"
+      config.missing_ok ?? false,
+      "END",
     );
   }
 
   if (actionType === "data_process") {
-    // ====== 数据处理子步骤 ======
-    // Python 版使用 eval() 动态执行用户代码，在 TypeScript 中不安全且不可控。
-    // 等 workflow_loader 迁移后，改用注册机制（用户预先注册处理函数，YAML 中引用函数名）。
+    // Data processing sub-step.
+    // The Python version used eval(), which is unsafe and uncontrolled in TypeScript.
+    // Use a future registration mechanism instead.
     throw new Error(
-      `data_process 类型暂不支持。` +
-      `原因：Python 版使用 eval() 执行，TS 中不安全。` +
-      `请等待 workflow_loader 迁移后使用注册机制替代。`
+      `data_process is not supported yet. ` +
+      `Reason: the Python version used eval(), which is unsafe in TypeScript. ` +
+      `Use a registration mechanism after workflow_loader support is available.`
     );
   }
 
-  // 未知类型，直接报错
-  throw new Error(`未知的子步骤类型: '${actionType}'，支持的类型: llm_call, read_file, data_process`);
+  throw new Error(`Unknown sub-step type: '${actionType}'. Supported types: llm_call, read_file, data_process`);
 }
 
 // ============================================================
-// ConcurrentAction — 并发编排动作
+// ConcurrentAction
 // ============================================================
 
 /**
- * 并发编排动作 —— 把一批 item 分发给子步骤并行处理
+ * Concurrent orchestration action that dispatches items to sub-steps.
  *
- * 工作原理（九步流程）：
- *   1. 从 context.data[itemsKey] 取出待处理的 items 数组
- *   2. 如果配了 saveToFile，创建输出目录
- *   3. 初始化 allCosts 成本收集数组
- *   4. 构建 [item, index] 元组列表
- *   5. 定义 processItem 函数（断点续存 → 创建子上下文 → 执行子步骤 → 收集成本 → 原子写文件）
- *   6. 调用 concurrentProcess() 批量并发执行
- *   7. aggregateCosts() 汇总所有成本
- *   8. failOnError 检查（如果有失败且 failOnError=true，抛出错误）
- *   9. 返回 StepResult
+ * Flow:
+ *   1. Read the items array from context.data[itemsKey].
+ *   2. Create the output directory when saveToFile is configured.
+ *   3. Initialize the allCosts collection.
+ *   4. Build [item, index] tuples.
+ *   5. Define processItem for resume checks, child contexts, sub-steps, costs, and writes.
+ *   6. Run concurrentProcess().
+ *   7. Aggregate all costs.
+ *   8. Enforce failOnError.
+ *   9. Return StepResult.
  *
- * 典型使用场景：
- *   - PDF OCR：并发处理每一页的图片识别
- *   - 批量翻译：并发调用 LLM 翻译每个文本段落
- *   - 批量文件读取：并发读取多个源文件
+ * Typical uses:
+ *   - PDF OCR: process page images concurrently
+ *   - Batch translation: translate text chunks concurrently
+ *   - Batch file reads: read many source files concurrently
  *
- * YAML 配置示例：
+ * YAML example:
  *   type: concurrent
  *   items_key: pages
  *   max_concurrent: 5
  *   process_steps:
  *     - type: llm_call
  *       model: deepseek-chat
- *       prompt_template: "翻译：{item}"
+ *       prompt_template: "Translate: {item}"
  *       validate_json: true
  *   save_to_file:
  *     output_dir: "output/{book_name}"
@@ -262,66 +257,66 @@ function _createActionFromConfig(
  */
 export class ConcurrentAction extends BaseAction {
   /**
-   * context.data 中存放 items 数组的键名
-   * 例如 itemsKey = "pages"，则从 context.data["pages"] 取出待处理列表
+   * Key in context.data that stores the items array.
+   * For example, itemsKey = "pages" reads context.data["pages"].
    */
   private readonly itemsKey: string;
 
   /**
-   * 子步骤配置列表（通常只有一个，但支持多个串行子步骤）
-   * 每个 item 会依次执行这些子步骤
+   * Sub-step config list. Usually one step, but multiple serial sub-steps are supported.
+   * Each item runs these sub-steps in order.
    */
   private readonly processSteps: ActionConfig[];
 
-  /** 最大并发数，控制同时处理多少个 item，默认 5 */
+  /** Maximum number of items processed at once. Defaults to 5. */
   private readonly maxConcurrent: number;
 
-  /** 初始任务派发延迟（秒），平滑 API 调用的负载峰值，默认读取环境变量 */
+  /** Initial dispatch delay in seconds, used to smooth API load spikes. */
   private readonly taskDispatchDelay?: number;
 
-  /** 熔断器阈值：连续失败多少次后停止派发新任务，默认 10 */
+  /** Circuit-breaker threshold: stop dispatching after this many consecutive failures. */
   private readonly circuitBreakerThreshold: number;
 
   /**
-   * 处理结果存入 context.data 的键名
-   * 例如 outputKey = "results"，则最终 context.data["results"] 是所有结果的数组
+   * Key where processed results are stored in context.data.
+   * For example, outputKey = "results" stores all results in context.data["results"].
    */
   private readonly outputKey: string;
 
-  /** 保存到文件的配置（可选），不配置则结果只存在内存中 */
+  /** Optional file-save config. Without it, results remain in memory only. */
   private readonly saveToFile?: SaveToFileConfig;
 
   /**
-   * 是否在有失败项时抛出错误中断工作流
-   *   true  → 有任何 item 处理失败就抛出 Error（默认）
-   *   false → 容忍失败，继续执行后续步骤
+   * Whether item failures should throw and stop the workflow.
+   *   true  -> throw if any item fails
+   *   false -> tolerate failures and continue
    */
   private readonly failOnError: boolean;
 
-  /** 执行完毕后跳转到的下一步骤名称 */
+  /** Next step name after this action finishes. */
   private readonly nextStep: string;
 
-  /** 步骤 ID，用于日志输出中的标识 */
+  /** Step ID used in log output. */
   private readonly stepId: string;
 
-  /** 工作流 YAML 所在目录，用于解析 save_to_file 中的相对路径 */
+  /** Workflow YAML directory, used to resolve relative save_to_file paths. */
   private readonly workflowDir?: string;
 
   /**
-   * 构造并发编排动作
-   *
-   * @param itemsKey               context.data 中存放 items 数组的键名
-   * @param processSteps           子步骤配置列表
-   * @param maxConcurrent          最大并发数（默认 5）
-   * @param taskDispatchDelay      初始派发延迟秒数（可选）
-   * @param circuitBreakerThreshold 熔断阈值（默认 10）
-   * @param outputKey              结果存入 context.data 的键名（默认 "results"）
-   * @param saveToFile             保存到文件的配置（可选）
-   * @param failOnError            有失败时是否抛错（默认 true）
-   * @param nextStep               下一步骤名称（默认 "END"）
-   * @param name                   动作名称（可选，默认类名）
-   * @param stepId                 步骤 ID（默认 "concurrent"）
-   * @param workflowDir            工作流目录（可选）
+   * Creates a concurrent orchestration action.
+ *
+   * @param itemsKey Key in context.data that stores the items array.
+   * @param processSteps Sub-step config list.
+   * @param maxConcurrent Maximum concurrency. Defaults to 5.
+   * @param taskDispatchDelay Initial dispatch delay in seconds.
+   * @param circuitBreakerThreshold Circuit-breaker threshold. Defaults to 10.
+   * @param outputKey Key where results are stored in context.data. Defaults to "results".
+   * @param saveToFile Optional file-save config.
+   * @param failOnError Whether failures should throw. Defaults to true.
+   * @param nextStep Next step name. Defaults to "END".
+   * @param name Optional action name.
+   * @param stepId Step ID. Defaults to "concurrent".
+   * @param workflowDir Optional workflow directory.
    */
   constructor(
     itemsKey: string,
@@ -352,91 +347,88 @@ export class ConcurrentAction extends BaseAction {
   }
 
   /**
-   * 执行并发编排（核心方法，九步流程）
+   * Executes the concurrent orchestration flow.
    *
-   * @param context 工作流上下文
-   * @returns StepResult，包含所有处理结果和汇总成本
+   * @param context Workflow context.
+   * @returns StepResult with processed results and aggregated cost metadata.
    */
   async execute(context: WorkflowContext): Promise<StepResult> {
     // ============================================================
-    // 第一步：从 context.data 取出待处理的 items 数组
+    // Step 1: read the items array from context.data
     // ============================================================
-    // 例如 itemsKey = "pages"，则 items = context.data["pages"]
-    // 如果键不存在或值不是数组，抛出明确的错误
-    // 批次计时起点，用于在处理结束时计算总耗时
+    // For itemsKey = "pages", this reads context.data["pages"].
+    // Throw a clear error when the key is missing or not an array.
+    // Batch timer used to calculate total duration.
     const batchStart = Date.now();
-    // 获取结构化日志记录器（同时写 .log 和 .jsonl），可能为 null
+    // Optional structured workflow logger, which may write both .log and .jsonl.
     const slog = context.workflowLogger;
 
     const rawItems = context.data[this.itemsKey];
     if (!Array.isArray(rawItems)) {
       throw new Error(
-        `[步骤${this.stepId}] context.data["${this.itemsKey}"] 不是数组，` +
-        `实际类型: ${typeof rawItems}，值: ${JSON.stringify(rawItems)?.slice(0, 100)}`
+        `[Step ${this.stepId}] context.data["${this.itemsKey}"] is not an array. ` +
+        `Actual type: ${typeof rawItems}, value: ${JSON.stringify(rawItems)?.slice(0, 100)}`
       );
     }
-    // 类型断言为 unknown[]，后续处理时每个 item 的具体类型由子步骤自行解释
+    // The concrete item type is left to the configured sub-steps.
     const items = rawItems as unknown[];
 
     logger.info(
-      `[步骤${this.stepId}] 开始并发处理 ${items.length} 个项目 ` +
-      `(并发数: ${this.maxConcurrent}, 熔断阈值: ${this.circuitBreakerThreshold})`
+      `[Step ${this.stepId}] Starting concurrent processing for ${items.length} item(s) ` +
+      `(concurrency: ${this.maxConcurrent}, circuit breaker: ${this.circuitBreakerThreshold})`
     );
 
     // ============================================================
-    // 第二步：创建输出目录（如果配置了 saveToFile）
+    // Step 2: create the output directory when saveToFile is configured
     // ============================================================
-    // 输出目录路径支持占位符，例如 "output/{book_name}/pages"
-    // formatPathTemplate 会将 {book_name} 替换为 context.data["book_name"] 的实际值
+    // Output directory templates support placeholders such as "output/{book_name}/pages".
     let outputDir: string | undefined;
     if (this.saveToFile) {
       try {
         outputDir = formatPathTemplate(this.saveToFile.output_dir, context.data);
       } catch (e) {
         throw new Error(
-          `[步骤${this.stepId}] save_to_file.output_dir 模板解析失败: ${e}`
+          `[Step ${this.stepId}] Failed to resolve save_to_file.output_dir template: ${e}`
         );
       }
-      // recursive: true 表示如果父目录不存在则自动递归创建
+      // recursive: true creates parent directories as needed.
       fs.mkdirSync(outputDir, { recursive: true });
-      logger.info(`[步骤${this.stepId}] 输出目录: ${outputDir}`);
+      logger.info(`[Step ${this.stepId}] Output directory: ${outputDir}`);
     }
 
     // ============================================================
-    // 第三步：初始化成本收集数组
+    // Step 3: initialize cost collection
     // ============================================================
-    // 每个 item 处理完后，如果子步骤产生了成本信息（如 LLM 调用），就追加到这里
-    // 最终用 aggregateCosts() 汇总为一个总成本
+    // Each item can append sub-step cost info, then aggregateCosts() combines it.
     const allCosts: CostResult[] = [];
 
     // ============================================================
-    // 第四步：构建 [item, index] 元组列表
+    // Step 4: build [item, index] tuples
     // ============================================================
-    // concurrentProcess 需要一个数组作为输入，这里把每个 item 和它的索引打包在一起，
-    // 方便 processItem 函数内部同时获取 item 内容和它在原始列表中的位置
+    // processItem needs both the item value and its original list position.
     const itemTuples: Array<[unknown, number]> = items.map(
       (item, idx) => [item, idx]
     );
 
     // ============================================================
-    // 第五步：定义 processItem 函数
+    // Step 5: define processItem
     // ============================================================
-    // 这个函数会被 concurrentProcess 并发调用，每个 item 执行一次
-    // 返回值格式：[ProcessStatus, result]
-    //   - "success" + 结果数据
-    //   - "skipped" + null（断点续存跳过）
-    //   - "fatal_error" + 错误描述
+    // concurrentProcess calls this once per item.
+    // Return format: [ProcessStatus, result]
+    //   - "success" + result data
+    //   - "skipped" + skip metadata
+    //   - "fatal_error" + error description
     const processItem = async (
       tuple: [unknown, number]
     ): Promise<["success" | "skipped" | "fatal_error", unknown]> => {
       const [item, index] = tuple;
-      // 任务计时起点
+      // Per-task timer.
       const taskStart = Date.now();
 
-      // 生成简洁的任务标签（文件路径取文件名、长字符串截断等）
+      // Build a compact label for logs.
       let _label: string;
       if (typeof item === "string") {
-        // 文件路径只取文件名部分
+        // For file paths, use only the filename.
         const parts = item.replace(/\\/g, "/").split("/");
         _label = parts[parts.length - 1] || item.slice(0, 60);
       } else if (item !== null && typeof item === "object") {
@@ -445,20 +437,19 @@ export class ConcurrentAction extends BaseAction {
         _label = String(item).slice(0, 60);
       }
 
-      logger.info(`[步骤${this.stepId}] 开始处理 [${index + 1}/${items.length}] ${_label}`);
+      logger.info(`[Step ${this.stepId}] Starting item [${index + 1}/${items.length}] ${_label}`);
 
-      // ----- 断点续存检查 -----
-      // 如果配置了 saveToFile，检查输出文件是否已经存在且有效
-      // 如果文件已存在，说明之前的运行已经处理过这个 item，直接跳过
-      // 这是"断点续存"的核心机制：中断后重新运行时，已完成的 item 不会重复处理
+      // ----- Resume check -----
+      // If saveToFile is configured, a valid existing output means this item
+      // was completed in a previous run and can be skipped.
       if (this.saveToFile && outputDir) {
         try {
-          // 构建文件名模板的变量：index 是 1-based（与文件编号对齐）
+          // Use a 1-based index for filenames so numbering matches saved files.
           const filenameVars: Record<string, unknown> = {
             ...context.data,
             item,
             item_index: index,
-            index: index + 1,  // 1-based 编号，与保存文件时一致
+            index: index + 1,
           };
           const filename = formatPathTemplate(
             this.saveToFile.filename_template,
@@ -466,14 +457,14 @@ export class ConcurrentAction extends BaseAction {
           );
           const outputPath = path.join(outputDir, filename);
 
-          // isValidOutputFile 根据扩展名选择验证策略：
-          //   .json → 解析验证（防止半截 JSON）
-          //   .txt 等 → 只检查存在且非空（需配合原子写入保证完整性）
+          // isValidOutputFile uses extension-specific validation:
+          //   .json -> parse validation, guarding against partial JSON
+          //   .txt and others -> exists and non-empty, relying on atomic writes
           if (isValidOutputFile(outputPath)) {
             logger.debug(
-              `[步骤${this.stepId}] 跳过已处理项目 ${index}: ${outputPath}`
+              `[Step ${this.stepId}] Skipping already processed item ${index}: ${outputPath}`
             );
-            // 结构化日志：记录跳过事件，方便排查断点续存行为
+            // Structured log event for resume diagnostics.
             if (slog) {
               slog.logEvent("concurrent_task_skip", {
                 step_id: this.stepId,
@@ -484,70 +475,69 @@ export class ConcurrentAction extends BaseAction {
                 file: outputPath,
               }, "INFO");
             }
-            return ["skipped", null];
+            return ["skipped", { saved_file: outputPath, item: String(item) }];
           }
         } catch {
-          // 文件名模板解析失败时不跳过，继续正常处理
-          // 这种情况可能是首次运行，变量还没有值
+          // If the filename template cannot be resolved, do not skip.
+          // This can happen on the first run before variables are available.
         }
       }
 
-      // ----- 创建子上下文 -----
-      // 每个 item 有自己独立的子上下文，避免并发修改同一个 context.data
-      // 子上下文继承父上下文的所有数据，额外注入 item 和 item_index
+      // ----- Child context -----
+      // Each item gets an isolated child context to avoid concurrent mutation
+      // of the parent context.data. Parent data is copied and item metadata is added.
       const childContext = new WorkflowContext({
         workflowId: `${context.workflowId}_item_${index}`,
         data: {
-          ...context.data,          // 继承父上下文的所有数据
-          item,                      // 当前正在处理的 item
-          item_index: index,         // 0-based 索引
+          ...context.data,
+          item,
+          item_index: index,
         },
         metadata: { ...context.metadata },
       });
 
-      // ----- 依次执行子步骤 -----
-      // processSteps 通常只有一个（如一次 LLM 调用），但支持多个串行子步骤
-      // 每个子步骤的输出会合并进 childContext.data，供下一个子步骤使用
+      // ----- Run sub-steps in sequence -----
+      // Most configs use one sub-step, but multiple serial sub-steps are supported.
+      // Each sub-step's output is merged into childContext.data for the next one.
       for (let stepIdx = 0; stepIdx < this.processSteps.length; stepIdx++) {
-        // 非空断言（!）：stepIdx 由 for 循环保证在 [0, length) 范围内
+        // The loop guarantees stepIdx is in range.
         const stepConfig = this.processSteps[stepIdx]!;
         const stepType = stepConfig.type ?? "unknown";
         const stepStart = Date.now();
 
-        // 用工厂函数根据配置创建 Action 实例
+        // Create an Action instance from the configured sub-step.
         const action = _createActionFromConfig(stepConfig, this.workflowDir);
 
         try {
-          // action.run() 是 BaseAction 的模板方法：计时 → execute() → 注入元数据
+          // action.run() is BaseAction's wrapper around execute().
           const result = await action.run(childContext);
 
-          // 子步骤耗时日志（debug 级别，不干扰正常输出）
+          // Debug-level sub-step duration log.
           const stepElapsed = ((Date.now() - stepStart) / 1000).toFixed(1);
           logger.debug(
-            `[步骤${this.stepId}] [${index + 1}] 子步骤${stepIdx + 1}(${stepType}) 完成 耗时${stepElapsed}s`
+            `[Step ${this.stepId}] [${index + 1}] Sub-step ${stepIdx + 1}(${stepType}) completed in ${stepElapsed}s`
           );
 
-          // 将子步骤结果合并进子上下文，供后续子步骤或文件保存使用
+          // Merge the sub-step result for later sub-steps or file saving.
           Object.assign(childContext.data, result.data);
 
-          // ----- 收集成本信息 -----
-          // 如果子步骤返回了成本信息（如 LLM 调用的 token 用量），追加到 allCosts
+          // ----- Collect cost info -----
+          // Append cost metadata from sub-steps such as LLM calls.
           const costInfo = safeGetCostInfo(result.metadata);
           if (costInfo && costInfo["pricing_available"]) {
             allCosts.push(costInfo as unknown as CostResult);
           }
         } catch (e) {
-          // ----- 宽松模式：上游文件缺失时自动跳过此项 -----
-          // Node.js 的文件未找到错误携带 code === "ENOENT"，等价于 Python 的 FileNotFoundError
-          // 当 failOnError 为 false 时，缺失文件不应中断整个批次，只需跳过当前 item
-          // 典型场景：上一步骤只成功处理了部分文件，本步骤并发读取时部分文件不存在
+          // ----- Lenient mode: skip missing upstream files -----
+          // Node uses code === "ENOENT" for missing files.
+          // When failOnError is false, missing upstream files skip only this item.
           const isFileNotFound = e instanceof Error
             && (e as NodeJS.ErrnoException).code === "ENOENT";
           if (isFileNotFound && !this.failOnError) {
             const elapsed = ((Date.now() - taskStart) / 1000).toFixed(1);
             logger.warn(
-              `[步骤${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
-              `上游文件缺失，自动跳过(耗时${elapsed}s): ${e}`
+              `[Step ${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
+              `upstream file is missing; skipping automatically (${elapsed}s): ${e}`
             );
             if (slog) {
               slog.logEvent("concurrent_task_skip", {
@@ -563,9 +553,8 @@ export class ConcurrentAction extends BaseAction {
             return ["skipped", { reason: "upstream_file_missing", item: String(item), index }];
           }
 
-          // 捕获 LLMValidationError 时，即使失败也要记录已消耗的成本
+          // Preserve LLM cost even when validation fails.
           if (e instanceof LLMValidationError) {
-            // LLMValidationError 携带 cost_info，确保重试成本不丢失
             const costResult: CostResult = {
               input_cost: e.cost_info.input_cost,
               output_cost: e.cost_info.output_cost,
@@ -579,14 +568,14 @@ export class ConcurrentAction extends BaseAction {
             allCosts.push(costResult);
           }
 
-          // 格式化错误上下文，生成可读的日志消息
+          // Format a readable error message for logs and stats.
           const elapsed = ((Date.now() - taskStart) / 1000).toFixed(1);
           const errMsg = formatErrorContext(e, item, stepConfig as Record<string, unknown>, index);
           logger.error(
-            `[步骤${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
-            `失败(耗时${elapsed}s): ${errMsg}`
+            `[Step ${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
+            `failed (${elapsed}s): ${errMsg}`
           );
-          // 结构化日志：记录失败事件
+          // Structured failure event.
           if (slog) {
             slog.logEvent("concurrent_task_fail", {
               step_id: this.stepId,
@@ -599,27 +588,26 @@ export class ConcurrentAction extends BaseAction {
             }, "ERROR");
           }
 
-          // 返回 fatal_error，concurrentProcess 会记录到 stats 中
+          // concurrentProcess records this fatal error in stats.
           return ["fatal_error", errMsg];
         }
       }
 
-      // ----- 原子写文件 -----
-      // 如果配了 saveToFile，把子上下文中指定键的数据写入 JSON 文件
-      // "原子写"是指：先写入完整内容再关闭文件，避免写到一半中断产生损坏文件
+      // ----- Atomic file write -----
+      // When saveToFile is configured, write the selected child-context data.
+      // Atomic writes avoid leaving partial files after interruptions.
       if (this.saveToFile && outputDir) {
         try {
-          // 从子上下文中取出要保存的数据
-          // deepGet 支持点路径，如 data_key = "result.translated_text"
+          // deepGet supports dotted paths, such as data_key = "result.translated_text".
           const dataToSave = deepGet(
             childContext.data,
             this.saveToFile.data_key
           );
 
-          // 构建文件名
+          // Build the output filename.
           const filenameVars: Record<string, unknown> = {
             ...childContext.data,
-            index: index + 1,  // 1-based 编号
+            index: index + 1,
           };
           const filename = formatPathTemplate(
             this.saveToFile.filename_template,
@@ -627,19 +615,18 @@ export class ConcurrentAction extends BaseAction {
           );
           const outputPath = path.join(outputDir, filename);
 
-          // 原子写入：先写 .tmp 再 rename，避免中断产生半截文件
-          // 这对非 JSON 文件尤其重要——断点续存时只检查"存在且非空"，
-          // 如果没有原子写入，半截的 .txt 文件会被误判为有效
+          // Write to a .tmp file and rename it, preventing partial outputs.
+          // This is especially important for non-JSON resume checks.
           const content = typeof dataToSave === "string"
             ? dataToSave
             : JSON.stringify(dataToSave, null, 2);
           atomicWriteFileSync(outputPath, content);
 
-          // 保存成功：记录耗时和输出文件名
+          // Log the successful save.
           const elapsed = ((Date.now() - taskStart) / 1000).toFixed(1);
           logger.info(
-            `[步骤${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
-            `完成 → ${path.basename(outputPath)} 耗时${elapsed}s`
+            `[Step ${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
+            `completed -> ${path.basename(outputPath)} in ${elapsed}s`
           );
           if (slog) {
             slog.logEvent("concurrent_task_done", {
@@ -652,15 +639,15 @@ export class ConcurrentAction extends BaseAction {
             }, "INFO");
           }
 
-          // 返回文件路径（成本已收集到 allCosts）
+          // Return the saved file path. Cost has already been collected.
           return ["success", { saved_file: outputPath, item: String(item) }];
         } catch (e) {
-          // 文件保存失败
+          // File save failure.
           const elapsed = ((Date.now() - taskStart) / 1000).toFixed(1);
           const errMsg = formatErrorContext(e, item, undefined, index);
           logger.error(
-            `[步骤${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
-            `保存文件失败(耗时${elapsed}s): ${errMsg}`
+            `[Step ${this.stepId}] [${index + 1}/${items.length}] ${_label} ` +
+            `failed to save file (${elapsed}s): ${errMsg}`
           );
           if (slog) {
             slog.logEvent("concurrent_task_fail", {
@@ -677,10 +664,10 @@ export class ConcurrentAction extends BaseAction {
         }
       }
 
-      // 没有配置 saveToFile 时，返回子上下文中的数据
+      // Without saveToFile, return data from the child context.
       const elapsed = ((Date.now() - taskStart) / 1000).toFixed(1);
       logger.info(
-        `[步骤${this.stepId}] [${index + 1}/${items.length}] ${_label} 完成 耗时${elapsed}s`
+        `[Step ${this.stepId}] [${index + 1}/${items.length}] ${_label} completed in ${elapsed}s`
       );
       if (slog) {
         slog.logEvent("concurrent_task_done", {
@@ -692,7 +679,7 @@ export class ConcurrentAction extends BaseAction {
         }, "INFO");
       }
 
-      // 取最后一个子步骤的 output_key 作为结果键名
+      // Use the final sub-step's output_key as the result key.
       const lastStep = this.processSteps[this.processSteps.length - 1];
       const outputData = lastStep !== undefined
         ? childContext.data[lastStep.output_key ?? "result"]
@@ -702,50 +689,50 @@ export class ConcurrentAction extends BaseAction {
     };
 
     // ============================================================
-    // 第六步：调用 concurrentProcess() 批量并发执行
+    // Step 6: run concurrentProcess()
     // ============================================================
-    // concurrentProcess 内部实现：信号量控制并发数 + 渐进式派发 + 熔断器
+    // concurrentProcess handles semaphore concurrency, ramp-up dispatch, and circuit breaking.
     const stats: ProcessStats = await concurrentProcess(
       itemTuples,
       processItem,
       this.maxConcurrent,
       this.taskDispatchDelay,
-      `[步骤${this.stepId}] 并发处理`,
+      `[Step ${this.stepId}] Concurrent processing`,
       this.circuitBreakerThreshold,
     );
 
     // ============================================================
-    // 第七步：汇总成本
+    // Step 7: aggregate costs
     // ============================================================
-    // 将所有子步骤的成本信息合并为一个总计
+    // Combine all sub-step cost metadata into a single total.
     const totalCost = allCosts.length > 0
       ? aggregateCosts(allCosts)
       : createZeroCostInfo();
 
     const batchElapsed = ((Date.now() - batchStart) / 1000).toFixed(1);
     logger.info(
-      `[步骤${this.stepId}] 并发处理完成: ` +
-      `成功 ${stats.success}, 失败 ${stats.failed}, 跳过 ${stats.skipped} ` +
-      `总耗时 ${batchElapsed}s`
+      `[Step ${this.stepId}] Concurrent processing finished: ` +
+      `success ${stats.success}, failed ${stats.failed}, skipped ${stats.skipped}, ` +
+      `total duration ${batchElapsed}s`
     );
 
-    // 列出失败任务清单，方便快速定位问题
+    // List failed tasks for quick diagnosis.
     const failedItems = stats.items.filter(
       (it) => it.status !== "success" && it.status !== "skipped"
     );
     if (failedItems.length > 0) {
       logger.warn(
-        `[步骤${this.stepId}] 失败任务列表 (${failedItems.length}个):\n` +
+        `[Step ${this.stepId}] Failed task list (${failedItems.length}):\n` +
         failedItems.map((it) => {
           const errText = it.result && typeof it.result === "object"
-            ? String((it.result as Record<string, unknown>)["error"] ?? "未知错误").slice(0, 120)
-            : "未知错误";
+            ? String((it.result as Record<string, unknown>)["error"] ?? "Unknown error").slice(0, 120)
+            : "Unknown error";
           return `  - ${it.item}: ${errText}`;
         }).join("\n")
       );
     }
 
-    // 写入 JSONL 批次汇总
+    // Write a JSONL batch summary when structured logging is available.
     if (slog) {
       slog.logEvent("concurrent_batch_done", {
         step_id: this.stepId,
@@ -765,31 +752,36 @@ export class ConcurrentAction extends BaseAction {
     }
 
     // ============================================================
-    // 第八步：failOnError 检查
+    // Step 8: enforce failOnError
     // ============================================================
-    // 如果有失败的 item 且 failOnError=true，抛出错误中断工作流
+    // If any item failed and failOnError is true, stop the workflow.
     if (this.failOnError && stats.failed > 0) {
       throw new Error(
-        `[步骤${this.stepId}] 并发处理中有 ${stats.failed} 个项目失败 ` +
-        `(总计 ${stats.total} 个)。` +
-        `设置 fail_on_error: false 可忽略失败继续执行。`
+        `[Step ${this.stepId}] Concurrent processing had ${stats.failed} failed item(s) ` +
+        `(total ${stats.total}). ` +
+        `Set fail_on_error: false to ignore failures and continue.`
       );
     }
 
     // ============================================================
-    // 第九步：返回 StepResult
+    // Step 9: return StepResult
     // ============================================================
-    // 收集所有成功项目的结果到数组中
+    const hasSavedFile = (result: unknown): boolean =>
+      result !== null &&
+      typeof result === "object" &&
+      typeof (result as Record<string, unknown>)["saved_file"] === "string";
+
+    // Include cached save-to-file skips so resumed runs return a complete output list.
     const results = stats.items
-      .filter((r) => r.status === "success")
+      .filter((r) => r.status === "success" || (r.status === "skipped" && hasSavedFile(r.result)))
       .map((r) => r.result);
 
     return new StepResult(
       this.nextStep,
       {
-        // 处理结果数组，键名由 outputKey 决定
+        // Result array, keyed by outputKey.
         [this.outputKey]: results,
-        // 处理统计信息，供后续步骤或日志使用
+        // Processing stats for downstream steps or logs.
         [`${this.outputKey}_stats`]: {
           total: stats.total,
           success: stats.success,
@@ -799,9 +791,9 @@ export class ConcurrentAction extends BaseAction {
         },
       },
       {
-        // 元数据：成本信息
+        // Cost metadata.
         cost: totalCost,
-        // 元数据：处理统计
+        // Processing stats metadata.
         concurrent_stats: {
           total: stats.total,
           success: stats.success,
