@@ -24,6 +24,7 @@ Date started: 2026-04-23
 | `src/workflow_actions/data_actions.ts` | Checked | 2026-04-24 | Processor output validation bug fixed; tracked comments translated to English and cleaned up from corrupted encoding. |
 | `src/workflow_actions/pdf_actions.ts` | Needs follow-up | 2026-04-24 | Result file list/count still ignores the current `page_range`; tracked comments and user-facing strings were translated to English. |
 | `src/pdf_to_images.ts` | Checked | 2026-04-25 | Page-range start validation bug fixed; tracked comments and user-facing strings translated to English. |
+| `src/workflow_actions/ebook_actions.ts` | Checked | 2026-04-26 | Merge/resume bugs fixed; tracked comments, logs, errors, and default action names translated to English. |
 
 Status values: `Planned`, `Checking`, `Checked`, `Needs follow-up`.
 
@@ -80,6 +81,12 @@ Record bugs here immediately after checking each file.
 
 - Fixed on 2026-04-25: `parsePageRange()` now rejects range expressions whose start page is greater than the PDF page count. For example, with a 10-page PDF, `11-20` now throws a direct validation error instead of finishing successfully with no generated pages.
 
+### `src/workflow_actions/ebook_actions.ts`
+
+- Fixed on 2026-04-25: `MergeToEpubAction.execute()` now reads concurrent stats from `${alignedKey}_stats` when `alignedKey` points at a result array such as `4_response`, and it can fall back to the result array length when stats are not present.
+- Fixed on 2026-04-25: `MergeToEpubAction.execute()` now creates a small default cover image for `nodepub`, verifies that the `.epub` file exists before returning its path, and reports `output_epub: null` with `epub_created: false` if ePub generation falls back to TXT only.
+- Fixed on 2026-04-25: `EpubExtractAction.execute()` now restores cached chunks using the configured `saveToFile.filename_template` instead of the hard-coded `chunk_\d+\.txt` pattern.
+
 ## Chinese Text Found
 
 Record Chinese comments, strings, prompts, and user-facing text here before translating them.
@@ -130,6 +137,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/pdf_to_images.ts`
 
 - Translated on 2026-04-25: tracked comments, user-facing log messages, and thrown error messages were translated to English.
+
+### `src/workflow_actions/ebook_actions.ts`
+
+- Translated on 2026-04-26: tracked comments, documentation comments, default action names, log messages, and thrown error messages were translated to English.
 
 ## Check Log
 
@@ -212,6 +223,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Chinese text details: see `Chinese Text Found` > `src/pdf_to_images.ts`.
 - Follow-up needed: none for the tracked `src/pdf_to_images.ts` work.
 
+### 2026-04-25 - `src/workflow_actions/ebook_actions.ts`
+
+- Checked `calculateTokens()`, `forceTruncateAtTarget()`, `splitBySentences()`, `EpubExtractAction`, `MergeToEpubAction`, and `ParseTranslationAction`, with extra attention on resume behavior, concurrent result handoff, ePub output reporting, and language state.
+- Bug details: see `Bugs Found` > `src/workflow_actions/ebook_actions.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/workflow_actions/ebook_actions.ts`.
+- Follow-up needed: none for the tracked `src/workflow_actions/ebook_actions.ts` work.
+
 ## Verification
 
 - `npm.cmd run typecheck` passed.
@@ -254,3 +272,12 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]"` returned no matches in `src/pdf_to_images.ts` and `tests/pdf_to_images.test.ts` after the tracked English cleanup.
 - `npm.cmd run typecheck` passed after translating the tracked `src/pdf_to_images.ts` comments and user-facing strings to English.
 - `npm.cmd test -- pdf_to_images` passed with 1 test after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]"` found Chinese comments, default action names, logs, and error strings in `src/workflow_actions/ebook_actions.ts` during the focused check.
+- Local `node_modules/nodepub/src/index.js` shows `cover` is required and must be non-empty, confirming the empty-cover ePub generation bug in `src/workflow_actions/ebook_actions.ts`.
+- `npm.cmd run typecheck` passed after fixing the tracked `src/workflow_actions/ebook_actions.ts` merge/resume bugs.
+- `npm.cmd test -- ebook_actions` passed with 2 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]"` returned no matches in `src/workflow_actions/ebook_actions.ts` and `tests/ebook_actions.test.ts` after the tracked English cleanup.
+- `npm.cmd run typecheck` passed after translating the tracked `src/workflow_actions/ebook_actions.ts` text to English.
+- `npm.cmd test -- ebook_actions` passed with 2 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `npm.cmd run typecheck` passed after adding Arabic question mark and Devanagari sentence-ending punctuation to the ebook sentence splitter.
+- `npm.cmd test -- ebook_actions` passed with 3 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.

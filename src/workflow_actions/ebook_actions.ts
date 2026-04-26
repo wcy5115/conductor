@@ -1,67 +1,54 @@
 /**
- * 电子书翻译 Action 集合
+ * Ebook translation actions.
  *
- * 本模块包含 3 个辅助函数和 3 个 Action 类，用于实现电子书翻译工作流：
- *   辅助函数：
- *     - calculateTokens —— 简易 token 估算（中文字符计 1，英文单词计 2）
- *     - forceTruncateAtTarget —— 按 token 数强制截断文本
- *     - splitBySentences —— 智能切分：按标点断句 + token 感知累积
+ * This module contains three helper functions and three action classes for
+ * ebook translation workflows:
+ *   Helpers:
+ *     - calculateTokens - lightweight token estimation
+ *     - forceTruncateAtTarget - hard-split text by estimated token count
+ *     - splitBySentences - sentence-aware splitting with token accumulation
  *
- *   Action 类：
- *     - EpubExtractAction —— 读取 ePub 文件，提取文本并按 token 数智能切分为块
- *     - MergeToEpubAction —— 将翻译后的对齐文本合并生成新 ePub + TXT
- *     - ParseTranslationAction —— 解析 LLM 翻译响应中的 ###SEGMENT### 格式
+ *   Actions:
+ *     - EpubExtractAction - read ePub/TXT files, extract text, and split it
+ *     - MergeToEpubAction - merge translated aligned text into ePub + TXT
+ *     - ParseTranslationAction - parse ###SEGMENT### blocks from LLM responses
  *
- * 迁移自 Python 版 LLM_agent/src/workflow_actions/ebook_actions.py
+ * Ported from the Python version at LLM_agent/src/workflow_actions/ebook_actions.py.
  */
 
-// fs 是 Node.js 内置的文件系统模块，这里用于读取对齐文件、写入 TXT 文件、创建目录等操作
 import fs from "fs";
-// path 是 Node.js 内置的路径处理模块，用于拼接输出文件路径、提取目录名
 import path from "path";
-// EPub 是 epub 包的核心类，用于解析 ePub 文件
-// 原理：读取 .epub（本质上是 ZIP 包），解析内部 XML 元数据和 XHTML 内容文件
-// flow 属性包含所有章节的清单项（ManifestItem），通过 getChapter(id) 获取章节 HTML
 import { EPub } from "epub";
-// cheerio 是服务端 jQuery 替代品，用于从 HTML 中提取纯文本
-// 等价于 Python 的 BeautifulSoup：load(html) 解析 HTML，然后 .text() 提取纯文本
 import * as cheerio from "cheerio";
-// WorkflowContext 是工作流的全局上下文对象，包含 data（共享数据）、history（执行历史）等
-// StepResult 是每个步骤执行完毕后的返回值，包含 nextStep（下一步）、data（数据）、metadata（元数据）
 import { WorkflowContext, StepResult } from "../workflow_engine.js";
-// BaseAction 是所有工作流动作的基类，提供 run() 方法（模板方法模式）
 import { BaseAction } from "./base.js";
 
-// nodepub 是 CommonJS 模块且没有类型定义，需要用 require 导入并手动声明接口
-// 用于创建新的 ePub 文件（写入），与 epub 包（读取）配合使用
+// nodepub is a CommonJS package without bundled TypeScript definitions.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const nodepub = require("nodepub");
 
 /**
- * nodepub 文档对象接口（手动声明）
+ * Minimal interface for the nodepub document object.
  *
- * nodepub 是纯 JS 库，没有自带 TypeScript 类型定义。
- * 这里根据 nodepub 源码和文档，手动声明我们用到的方法签名。
- *
- * nodepub.document(metadata) 返回此接口的实例。
+ * nodepub.document(metadata) returns an object with these methods.
  */
 interface NodepubDocument {
-  /** 添加一个章节（section）到 ePub 中 */
+  /** Add one section to the ePub. */
   addSection: (
-    title: string,       // 章节标题
-    content: string,     // 章节 HTML 内容
-    excludeFromContents?: boolean,  // 是否从目录中排除
-    isFrontMatter?: boolean,        // 是否为前言（出现在目录之前）
-    overrideFilename?: string       // 自定义内部文件名（不含扩展名）
+    title: string,
+    content: string,
+    excludeFromContents?: boolean,
+    isFrontMatter?: boolean,
+    overrideFilename?: string
   ) => void;
-  /** 写入 ePub 文件到指定目录，文件名不含 .epub 后缀 */
+  /** Write the ePub into a folder. The filename should omit the .epub suffix. */
   writeEPUB: (folder: string, filename: string) => Promise<void>;
 }
 
 /**
- * 简易日志器
+ * Minimal logger.
  *
- * 与 base.ts 保持一致的最小化日志方案，避免引入复杂依赖。
+ * Keeps this action consistent with base.ts without introducing a logging dependency.
  */
 const logger = {
   info: (msg: string) => console.info(msg),
@@ -69,144 +56,230 @@ const logger = {
   warn: (msg: string) => console.warn(msg),
 };
 
+const DEFAULT_CHUNK_FILENAME_TEMPLATE = "chunk_{index:04d}.txt";
+
+const DEFAULT_COVER_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+interface MergeCountSummary {
+  successCount: number;
+  skippedCount: number;
+  availableCount: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : 0;
+}
+
+function getMergeCountSummary(
+  data: Record<string, unknown>,
+  alignedKey: string
+): MergeCountSummary | null {
+  const alignedResult = data[alignedKey];
+  const statsResult = data[`${alignedKey}_stats`];
+  const statsSource = isRecord(statsResult)
+    ? statsResult
+    : isRecord(alignedResult)
+      ? alignedResult
+      : null;
+
+  if (statsSource) {
+    const successCount = asCount(statsSource["success"]);
+    const skippedCount = asCount(statsSource["skipped"]);
+    return {
+      successCount,
+      skippedCount,
+      availableCount: successCount + skippedCount,
+    };
+  }
+
+  if (Array.isArray(alignedResult)) {
+    return {
+      successCount: alignedResult.length,
+      skippedCount: 0,
+      availableCount: alignedResult.length,
+    };
+  }
+
+  return null;
+}
+
+function formatChunkFilename(template: string, index: number): string {
+  return template.replace(/\{index(?::(\d+)d)?\}/, (_, width) => {
+    const w = width ? parseInt(width, 10) : 0;
+    return String(index).padStart(w, "0");
+  });
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function chunkFilenamePattern(template: string): RegExp {
+  const match = /\{index(?::(\d+)d)?\}/.exec(template);
+  if (!match) {
+    return new RegExp(`^${escapeRegExp(template)}$`);
+  }
+
+  const before = escapeRegExp(template.slice(0, match.index));
+  const after = escapeRegExp(template.slice(match.index + match[0].length));
+  const digits = match[1] ? `\\d{${parseInt(match[1], 10)}}` : "\\d+";
+  return new RegExp(`^${before}(${digits})${after}$`);
+}
+
+function listSavedChunkFiles(
+  outputDir: string,
+  template: string
+): Array<{ filename: string; index: number }> {
+  const pattern = chunkFilenamePattern(template);
+  return fs
+    .readdirSync(outputDir)
+    .map((filename) => {
+      const match = pattern.exec(filename);
+      if (!match) return null;
+      const index = match[1] ? parseInt(match[1], 10) : 1;
+      return { filename, index };
+    })
+    .filter((entry): entry is { filename: string; index: number } => entry !== null)
+    .sort((a, b) => a.index - b.index);
+}
+
 // ============================================================
-// 辅助函数（仅本模块内部使用）
+// Internal helper functions
 // ============================================================
 
 /**
- * 简易 token 估算
+ * Lightweight token estimation.
  *
- * 不使用真正的 tokenizer（如 tiktoken），而是用简单的启发式规则估算 token 数：
- *   - 中文字符（\u4e00-\u9fff）：每个字符计 1 个 token
- *   - 英文单词（\b[a-zA-Z]+\b）：每个单词计 2 个 token
- *   - 其余字符（标点/空格/数字/符号）：每个计 1 个 token
+ * This intentionally avoids a model-specific tokenizer such as tiktoken.
+ * It uses a simple heuristic that is fast enough for chunk sizing:
+ *   - CJK characters in \u4e00-\u9fff count as 1 token each
+ *   - English words matched by \b[a-zA-Z]+\b count as 2 tokens each
+ *   - Other characters count as 1 token each
  *
- * 这个估算方式粗略但速度快，适合用于文本切分时的大致控制。
- * 实际 token 数取决于具体模型的 tokenizer，但对于切分来说够用了。
+ * Real token counts depend on the target model tokenizer, but this is enough
+ * for rough text splitting.
  *
- * 示例：
- *   calculateTokens("你好世界")        → 4（4 个中文字符 × 1）
- *   calculateTokens("hello world")    → 5（2 个英文单词 × 2 + 1 个空格 × 1）
- *   calculateTokens("你好 hello")     → 5（2 个中文字符 × 1 + 1 个空格 × 1 + 1 个英文单词 × 2）
- *   calculateTokens("")               → 0
+ * Examples:
+ *   calculateTokens("\u4f60\u597d") -> 2
+ *   calculateTokens("hello world") -> 5
+ *   calculateTokens("") -> 0
  *
- * @param text 要估算的文本
- * @returns 估算的 token 数
+ * @param text Text to estimate.
+ * @returns Estimated token count.
  */
 function calculateTokens(text: string): number {
   if (!text) return 0;
 
-  // 正则 [\u4e00-\u9fff] 匹配 CJK 统一表意文字区间（基本汉字）
-  // \u4e00 是"一"，\u9fff 是"鿿"，覆盖了绝大多数常用汉字
+  // Match the basic CJK unified ideograph range.
   const chineseChars = (text.match(/[\u4e00-\u9fff]/gu) || []).length;
 
-  // 正则 \b[a-zA-Z]+\b 匹配由英文字母组成的完整单词
-  // \b 是单词边界锚点，确保匹配完整单词而非部分子串
+  // Match complete alphabetic English words.
   const englishWords = text.match(/\b[a-zA-Z]+\b/gu) || [];
-  // 英文单词占据的字符总数（用于计算"其余字符"数量）
+  // Total characters consumed by English words.
   const englishWordChars = englishWords.reduce((sum, w) => sum + w.length, 0);
-  // 英文单词的 token 数：每个单词计 2 个 token
+  // English words are estimated as 2 tokens each.
   const englishWordTokens = englishWords.length * 2;
-  // 其余字符：总长度 - 中文字符数 - 英文字母字符数
-  // 包括标点、空格、数字、符号等，每个计 1 个 token
+  // Punctuation, spaces, digits, and symbols are estimated as 1 token each.
   const otherChars = text.length - chineseChars - englishWordChars;
 
   return chineseChars + englishWordTokens + otherChars;
 }
 
 /**
- * 按 token 数强制截断文本
+ * Hard-truncate text by estimated token count.
  *
- * 逐字符遍历文本，累加每个字符的 token 数，当超出目标值时截断。
- * 返回 [head, tail] 二元组：head 是目标长度以内的前半部分，tail 是剩余部分。
+ * Walks through the text character by character and returns [head, tail].
+ * head stays within the target token budget, and tail contains the remainder.
  *
- * 如果整段文本的 token 数未超过 target，则 head = 整段文本，tail = 空字符串。
+ * If the whole text fits, tail is an empty string.
  *
- * 示例：
- *   forceTruncateAtTarget("你好世界测试", 3) → ["你好世", "界测试"]
- *   forceTruncateAtTarget("hi", 100)        → ["hi", ""]
+ * Examples:
+ *   forceTruncateAtTarget("hello", 2) -> ["h", "ello"]
+ *   forceTruncateAtTarget("hi", 100) -> ["hi", ""]
  *
- * @param text 要截断的文本
- * @param targetTokens 目标 token 数上限
- * @returns [前半段, 后半段] 的二元组
+ * @param text Text to split.
+ * @param targetTokens Target token ceiling.
+ * @returns [head, tail].
  */
 function forceTruncateAtTarget(
   text: string,
   targetTokens: number
 ): [string, string] {
-  // 快速判断：整段文本未超限，直接返回
+  // Fast path: the whole text already fits.
   if (calculateTokens(text) <= targetTokens) {
     return [text, ""];
   }
 
-  // 逐字符累加 token 数，找到截断位置
+  // Accumulate token estimates until adding the next character would exceed the target.
   let currentTokens = 0;
   for (let i = 0; i < text.length; i++) {
     const charTokens = calculateTokens(text[i]!);
-    // 如果加上当前字符会超出目标，就在这里截断
     if (currentTokens + charTokens > targetTokens) {
       return [text.slice(0, i), text.slice(i)];
     }
     currentTokens += charTokens;
   }
 
-  // 理论上走不到这里（前面已判断整段未超限的情况），保险起见返回整段
+  // Defensive fallback.
   return [text, ""];
 }
 
 /**
- * 智能切分：按标点断句 + token 感知累积
+ * Sentence-aware splitting with token accumulation.
  *
- * 工作流程：
- *   1. 先按中英文句末标点（。！？.?!）将文本拆分为句子
- *   2. 逐句累积 token 数，当累积到 targetTokens 时切出一个块
- *   3. 如果累积量超过 emergencyThreshold（紧急阈值），
- *      触发强制截断模式（调用 forceTruncateAtTarget），避免单个块过长
+ * Flow:
+ *   1. Split text by common Chinese and English sentence-ending punctuation.
+ *   2. Accumulate estimated tokens sentence by sentence.
+ *   3. If the accumulated size reaches the emergency threshold, hard-split
+ *      with forceTruncateAtTarget so a single chunk cannot grow too large.
  *
- * 设计意图：
- *   - targetTokens 是"理想块大小"，尽量在句子边界处切分
- *   - emergencyThreshold 是"安全上限"，超过时不再等句子结束，直接截断
- *   - 这样既保证了语义完整性（在句子边界切），又避免了超长块
+ * targetTokens is the preferred chunk size. emergencyThreshold is the safety
+ * ceiling where preserving sentence boundaries becomes less important than
+ * keeping chunks bounded.
  *
- * 示例：
- *   splitBySentences("第一句。第二句。第三句。", 5, 10)
- *   → 根据每句的 token 数，可能返回 ["第一句。第二句。", "第三句。"]
+ * Example:
+ *   splitBySentences("First. Second. Third.", 5, 10)
+ *   may return ["First.", "Second.", "Third."] depending on token estimates.
  *
- * @param fullText 要切分的完整文本
- * @param targetTokens 每个块的理想 token 数
- * @param emergencyThreshold 强制截断的紧急阈值
- * @returns 切分后的文本块数组
+ * @param fullText Full text to split.
+ * @param targetTokens Preferred token count per chunk.
+ * @param emergencyThreshold Hard-split threshold.
+ * @returns Split text chunks.
  */
 function splitBySentences(
   fullText: string,
   targetTokens: number,
   emergencyThreshold: number
 ): string[] {
-  // 正则匹配中英文句末标点，使用捕获组 () 让 split 保留分隔符
-  // 例如 "你好。世界！" 会被拆分为 ["你好", "。", "世界", "！"]
-  const SENTENCE_ENDINGS = /([。！？.?!])/;
+  // Use a capture group so split keeps the sentence-ending punctuation.
+  const SENTENCE_ENDINGS = /([。！？.?!؟।॥])/;
   const sentences = fullText.split(SENTENCE_ENDINGS);
 
-  // 将标点与前面的句子重新合并
-  // sentences[0::2] 是句子内容，sentences[1::2] 是标点
-  // zip 后得到 ["你好。", "世界！"]
+  // Reattach each delimiter to the preceding sentence.
   let parts: string[];
   if (sentences.length <= 1) {
-    // 没有找到标点分隔符，整段作为一个 part
+    // No sentence delimiter was found, so the whole text is one part.
     parts = [fullText];
   } else {
     parts = [];
-    // 每两个元素配对：sentences[0]+sentences[1], sentences[2]+sentences[3], ...
+    // Pair content with delimiter: sentences[0]+sentences[1], etc.
     for (let i = 0; i < sentences.length - 1; i += 2) {
       parts.push((sentences[i] ?? "") + (sentences[i + 1] ?? ""));
     }
-    // 如果 sentences 数量为奇数，最后一个元素没有配对的标点，单独追加
+    // Preserve any trailing text that has no matching delimiter.
     if (sentences.length % 2 !== 0) {
       parts.push(sentences[sentences.length - 1] ?? "");
     }
   }
 
-  // 逐句累积，达到目标 token 数时切出一个块
+  // Accumulate sentence-sized parts into chunks.
   const finalChunks: string[] = [];
   let currentChunkParts: string[] = [];
   let currentTokens = 0;
@@ -216,8 +289,7 @@ function splitBySentences(
     if (!trimmed) continue;
     const partTokens = calculateTokens(trimmed);
 
-    // 紧急模式：当前累积量已达到或即将达到紧急阈值
-    // 此时不再等待句子边界，直接强制截断
+    // Emergency mode: stop waiting for sentence boundaries and hard-split.
     if (
       currentTokens >= emergencyThreshold ||
       currentTokens + partTokens >= emergencyThreshold
@@ -225,7 +297,7 @@ function splitBySentences(
       currentChunkParts.push(trimmed);
       const superChunk = currentChunkParts.join("");
 
-      // 循环截断：将超长文本反复截断为 targetTokens 大小的块
+      // Repeatedly split an oversized chunk back down to the preferred size.
       let processingChunk = superChunk;
       while (calculateTokens(processingChunk) > 0) {
         const [head, tail] = forceTruncateAtTarget(
@@ -238,25 +310,25 @@ function splitBySentences(
         processingChunk = tail;
       }
 
-      // 重置累积器
+      // Reset accumulation after the emergency split.
       currentChunkParts = [];
       currentTokens = 0;
       continue;
     }
 
-    // 正常模式：如果加上当前句子会超出目标，先切出当前块，再开始新块
+    // Normal mode: if this part exceeds the target, close the current chunk first.
     if (currentTokens + partTokens > targetTokens && currentChunkParts.length > 0) {
       finalChunks.push(currentChunkParts.join(""));
       currentChunkParts = [trimmed];
       currentTokens = partTokens;
     } else {
-      // 未超出目标，继续累积
+      // Still within the preferred target.
       currentChunkParts.push(trimmed);
       currentTokens += partTokens;
     }
   }
 
-  // 收尾：将最后一段残余的累积内容作为最后一个块
+  // Flush the final accumulated chunk.
   if (currentChunkParts.length > 0) {
     finalChunks.push(currentChunkParts.join(""));
   }
@@ -265,47 +337,46 @@ function splitBySentences(
 }
 
 // ============================================================
-// EpubExtractAction — 从电子书（ePub/TXT）提取文本并按段落切分
+// EpubExtractAction - extract and split text from ePub/TXT files
 // ============================================================
 
 /**
- * 从电子书（ePub/TXT）提取文本并按段落切分
+ * Extract text from an ePub or TXT file and split it into chunks.
  *
- * 支持格式：.epub, .txt
+ * Supported formats: .epub, .txt
  *
- * 工作流程：
- *   1. 根据文件扩展名选择提取方式（ePub 解析 / TXT 读取）
- *   2. 对于 ePub：遍历所有章节（flow），用 cheerio 从 HTML 中提取纯文本
- *      对于 TXT：自动检测编码（utf-8/utf-8-sig/gbk/gb18030）读取全文
- *   3. 合并所有文本
- *   4. 使用 splitBySentences 智能切分为合适大小的块
- *   5. 输出带序号的文本块列表
+ * Flow:
+ *   1. Choose extraction mode by file extension.
+ *   2. For ePub, walk all flow items and extract text from chapter HTML.
+ *      For TXT, detect common encodings and read the full file.
+ *   3. Merge all text.
+ *   4. Split with splitBySentences.
+ *   5. Return numbered text chunks.
  *
- * 输入：context.data[inputKey] — 电子书文件路径
- * 输出：context.data[outputKey] — 文本块列表，每个块是 { index: number, text: string }
+ * Input: context.data[inputKey] is the ebook file path.
+ * Output: context.data[outputKey] is an array of { index, text } chunks.
  *
- * 示例输出：
+ * Example output:
  *   [
- *     { index: 1, text: "第一章的内容..." },
- *     { index: 2, text: "第二章的内容..." }
+ *     { index: 1, text: "Chapter one..." },
+ *     { index: 2, text: "Chapter two..." }
  *   ]
  */
 export class EpubExtractAction extends BaseAction {
   static readonly SUPPORTED_EXTENSIONS = new Set([".epub", ".txt"]);
 
-  // inputKey：从 context.data 中取电子书文件路径的键名
+  // Key used to read the ebook path from context.data.
   private readonly inputKey: string;
-  // outputKey：切分后的文本块列表存入 context.data 的键名
+  // Key used to store split chunks in context.data.
   private readonly outputKey: string;
-  // targetTokens：每个文本块的理想 token 数（传给 splitBySentences）
+  // Preferred token count per text chunk.
   private readonly targetTokens: number;
-  // emergencyThreshold：强制截断的紧急阈值（传给 splitBySentences）
+  // Hard-split threshold passed to splitBySentences.
   private readonly emergencyThreshold: number;
-  // nextStep：执行完毕后跳转到的下一步 ID
+  // Next step after extraction completes.
   private readonly nextStep: string;
-  // saveToFile：可选的断点续传配置
-  // 如果配置了该字段，提取后的文本块会保存到文件，下次运行时直接从文件恢复跳过提取
-  // 配置格式：{ output_dir: "data/{project}/original", filename_template: "chunk_{index:04d}.txt" }
+  // Optional resume configuration for saving and restoring extracted chunks.
+  // Example: { output_dir: "data/{project}/original", filename_template: "chunk_{index:04d}.txt" }
   private readonly saveToFile?: { output_dir: string; filename_template?: string };
 
   constructor(
@@ -314,7 +385,7 @@ export class EpubExtractAction extends BaseAction {
     targetTokens: number = 1000,
     emergencyThreshold: number = 1500,
     nextStep: string = "2",
-    name: string = "提取并切分文本",
+    name: string = "Extract and Split Text",
     saveToFile?: { output_dir: string; filename_template?: string },
     config: Record<string, unknown> = {}
   ) {
@@ -328,7 +399,7 @@ export class EpubExtractAction extends BaseAction {
   }
 
   /**
-   * 从 ePub 提取全文
+   * Extract full text from an ePub file.
    */
   private async extractEpub(filePath: string): Promise<string> {
     const epub = new EPub(filePath);
@@ -346,63 +417,65 @@ export class EpubExtractAction extends BaseAction {
           }
         }
       } catch {
-        logger.warn(`跳过无法解析的章节: ${item.id}`);
+        logger.warn(`Skipping chapter that could not be parsed: ${item.id}`);
       }
     }
     return allText.join("\n\n");
   }
 
   /**
-   * 从 TXT 文件读取全文
+   * Read full text from a TXT file.
    *
-   * 尝试常见编码：utf-8, utf-8-sig(BOM), gbk, gb18030
-   * Node.js 原生只支持 utf-8，其他编码通过 TextDecoder 处理
+   * Tries common encodings: utf-8, utf-8-sig (BOM), gbk, gb18030.
+   * Node.js native buffer decoding handles utf-8; TextDecoder handles the rest.
    */
   private extractTxt(filePath: string): string {
     const buffer = fs.readFileSync(filePath);
 
-    // 检测并去除 UTF-8 BOM
+    // Detect and strip a UTF-8 BOM.
     if (buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
-      logger.info("TXT 文件使用编码: utf-8-sig");
+      logger.info("TXT file encoding: utf-8-sig");
       return buffer.subarray(3).toString("utf-8");
     }
 
-    // 尝试 UTF-8
+    // Try UTF-8.
     try {
       const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-      logger.info("TXT 文件使用编码: utf-8");
+      logger.info("TXT file encoding: utf-8");
       return text;
-    } catch { /* 不是有效 UTF-8 */ }
+    } catch { /* Not valid UTF-8. */ }
 
-    // 尝试 GBK / GB18030
+    // Try GBK / GB18030.
     for (const encoding of ["gbk", "gb18030"] as const) {
       try {
         const text = new TextDecoder(encoding, { fatal: true }).decode(buffer);
-        logger.info(`TXT 文件使用编码: ${encoding}`);
+        logger.info(`TXT file encoding: ${encoding}`);
         return text;
-      } catch { /* 继续尝试 */ }
+      } catch { /* Try the next encoding. */ }
     }
 
-    throw new Error("无法解码 TXT 文件，尝试过的编码: utf-8, utf-8-sig, gbk, gb18030");
+    throw new Error("Could not decode TXT file; tried encodings: utf-8, utf-8-sig, gbk, gb18030");
   }
 
   async execute(context: WorkflowContext): Promise<StepResult> {
-    // 第一步：从上下文获取电子书文件路径
+    // Read the ebook path from context.
     const filePath = context.data[this.inputKey] as string | undefined;
     if (!filePath) {
-      throw new Error(`缺少输入路径: ${this.inputKey}`);
+      throw new Error(`Missing input path: ${this.inputKey}`);
     }
 
-    // 检查文件扩展名
+    // Validate the file extension.
     const ext = path.extname(filePath).toLowerCase();
     if (!EpubExtractAction.SUPPORTED_EXTENSIONS.has(ext)) {
       throw new Error(
-        `不支持的文件格式: ${ext}，支持: ${[...EpubExtractAction.SUPPORTED_EXTENSIONS].join(", ")}`
+        `Unsupported file format: ${ext}; supported formats: ${[...EpubExtractAction.SUPPORTED_EXTENSIONS].join(", ")}`
       );
     }
 
-    // ----- 断点续传：如果文本块文件已存在，直接从文件恢复 -----
+    // Resume: restore from saved chunk files when they already exist.
     if (this.saveToFile) {
+      const template =
+        this.saveToFile.filename_template ?? DEFAULT_CHUNK_FILENAME_TEMPLATE;
       let resolvedDir = this.saveToFile.output_dir;
       for (const [key, value] of Object.entries(context.data)) {
         resolvedDir = resolvedDir.replaceAll(`{${key}}`, String(value));
@@ -410,16 +483,14 @@ export class EpubExtractAction extends BaseAction {
       const outputDir = path.resolve(resolvedDir);
 
       if (fs.existsSync(outputDir)) {
-        const existingFiles = fs.readdirSync(outputDir)
-          .filter((f) => /^chunk_\d+\.txt$/.test(f))
-          .sort();
+        const existingFiles = listSavedChunkFiles(outputDir, template);
 
         if (existingFiles.length > 0) {
-          const chunkList = existingFiles.map((f, i) => ({
+          const chunkList = existingFiles.map((entry, i) => ({
             index: i + 1,
-            text: fs.readFileSync(path.join(outputDir, f), "utf-8"),
+            text: fs.readFileSync(path.join(outputDir, entry.filename), "utf-8"),
           }));
-          logger.info(`从已有文本块文件恢复 ${chunkList.length} 个块，跳过提取`);
+          logger.info(`Restored ${chunkList.length} chunk(s) from existing chunk files; skipping extraction`);
           return new StepResult(
             this.nextStep,
             { [this.outputKey]: chunkList },
@@ -429,9 +500,9 @@ export class EpubExtractAction extends BaseAction {
       }
     }
 
-    logger.info(`开始提取文本 (${ext}): ${filePath}`);
+    logger.info(`Starting text extraction (${ext}): ${filePath}`);
 
-    // 根据文件类型提取全文
+    // Extract full text by file type.
     let fullText: string;
     if (ext === ".epub") {
       fullText = await this.extractEpub(filePath);
@@ -439,24 +510,22 @@ export class EpubExtractAction extends BaseAction {
       fullText = this.extractTxt(filePath);
     }
 
-    // 第五步：智能切分（句子级 + token 感知）
+    // Split text with sentence boundaries and token estimates.
     const chunks = splitBySentences(
       fullText,
       this.targetTokens,
       this.emergencyThreshold
     );
 
-    // 第六步：转换为带序号的字典列表
-    // index 从 1 开始（1-based），与 Python 版保持一致
+    // Convert chunks into 1-based numbered records, matching the Python version.
     const chunkList = chunks.map((chunk, i) => ({
       index: i + 1,
       text: chunk,
     }));
 
-    logger.info(`提取完成，共切分为 ${chunkList.length} 个文本块`);
+    logger.info(`Extraction finished; split into ${chunkList.length} text chunk(s)`);
 
-    // ----- 保存文本块到文件（供断点续传使用） -----
-    // 将每个文本块写入独立的 .txt 文件，下次运行时可直接从文件恢复
+    // Save chunks to files for resume support.
     if (this.saveToFile) {
       let resolvedDir = this.saveToFile.output_dir;
       for (const [key, value] of Object.entries(context.data)) {
@@ -465,20 +534,15 @@ export class EpubExtractAction extends BaseAction {
       const outputDir = path.resolve(resolvedDir);
       fs.mkdirSync(outputDir, { recursive: true });
 
-      // 文件名模板，默认 "chunk_{index:04d}.txt"
-      const template = this.saveToFile.filename_template ?? "chunk_{index:04d}.txt";
+      // Filename template. Default: "chunk_{index:04d}.txt".
+      const template =
+        this.saveToFile.filename_template ?? DEFAULT_CHUNK_FILENAME_TEMPLATE;
       for (const chunk of chunkList) {
-        // 简单替换 {index:04d} 格式的占位符为零补全的数字
-        const filename = template.replace(
-          /\{index(?::(\d+)d)?\}/,
-          (_, width) => {
-            const w = width ? parseInt(width, 10) : 0;
-            return String(chunk.index).padStart(w, "0");
-          }
-        );
+        // Replace {index:04d}-style placeholders with zero-padded numbers.
+        const filename = formatChunkFilename(template, chunk.index);
         fs.writeFileSync(path.join(outputDir, filename), chunk.text, "utf-8");
       }
-      logger.info(`已保存 ${chunkList.length} 个文本块到 ${outputDir}`);
+      logger.info(`Saved ${chunkList.length} text chunk(s) to ${outputDir}`);
     }
 
     return new StepResult(
@@ -490,36 +554,36 @@ export class EpubExtractAction extends BaseAction {
 }
 
 // ============================================================
-// MergeToEpubAction — 合并对齐后的文本生成 ePub
+// MergeToEpubAction - merge aligned text into ePub and TXT outputs
 // ============================================================
 
 /**
- * 合并对齐后的文本生成 ePub
+ * Merge aligned translated text and generate output files.
  *
- * 工作流程：
- *   1. 验证步骤 3 的对齐结果是否成功
- *   2. 从文件系统读取所有 aligned_*.txt 对齐文件
- *   3. 合并文本，用 nodepub 生成新的 ePub 文件
- *   4. 同时生成 TXT 文件（便于查看纯文本）
+ * Flow:
+ *   1. Validate that the upstream concurrent step produced usable results.
+ *   2. Read all aligned text files from disk.
+ *   3. Merge the text and ask nodepub to create a new ePub file.
+ *   4. Also generate a TXT file for plain-text inspection.
  *
- * 路径模板支持：outputDir / outputFilename / bookTitle 中的 {key} 占位符
- * 会被替换为 context.data 中对应的值（如 {book_name} → 实际书名）
+ * Path templates in outputDir, outputFilename, and bookTitle support {key}
+ * placeholders that are replaced with matching values from context.data.
  *
- * 输入：context.data[alignedKey] — 步骤 3 的对齐结果（用于验证成功数量）
- * 输出：context.data[outputKey] — { output_epub: string, output_txt: string }
+ * Input: context.data[alignedKey] and/or context.data[`${alignedKey}_stats`].
+ * Output: context.data[outputKey] is { output_epub, output_txt }.
  */
 export class MergeToEpubAction extends BaseAction {
-  // alignedKey：步骤 3 输出结果在 context.data 中的键名（用于验证是否有成功结果）
+  // Context key for upstream aligned result data.
   private readonly alignedKey: string;
-  // alignedDir：对齐文件所在目录路径（支持路径模板占位符）
+  // Directory containing aligned text files. Supports context placeholders.
   private readonly alignedDir: string;
-  // outputDir：输出目录路径（支持路径模板占位符）
+  // Output directory. Supports context placeholders.
   private readonly outputDir: string;
-  // outputFilename：输出文件名（支持路径模板占位符），包含 .epub 后缀
+  // Output filename, including the .epub suffix. Supports context placeholders.
   private readonly outputFilename: string;
-  // bookTitle：ePub 的书名元数据
+  // ePub title metadata.
   private readonly bookTitle: string;
-  // outputKey：输出结果存入 context.data 的键名
+  // Context key for output file paths.
   private readonly outputKey: string;
   private readonly nextStep: string;
 
@@ -531,7 +595,7 @@ export class MergeToEpubAction extends BaseAction {
     bookTitle: string = "Translated Book",
     outputKey: string = "output",
     nextStep: string = "END",
-    name: string = "生成ePub",
+    name: string = "Generate ePub",
     config: Record<string, unknown> = {}
   ) {
     super(name, config);
@@ -545,9 +609,7 @@ export class MergeToEpubAction extends BaseAction {
   }
 
   async execute(context: WorkflowContext): Promise<StepResult> {
-    // 辅助函数：替换路径模板中的 {key} 占位符
-    // 遍历 context.data 的所有键值对，将模板中的 {key} 替换为对应的值
-    // 例如 context.data = { book_name: "三体" }，则 "{book_name}.epub" → "三体.epub"
+    // Replace {key} placeholders in path templates with context.data values.
     const replaceContextVars = (text: string): string => {
       let result = text;
       for (const [key, value] of Object.entries(context.data)) {
@@ -563,31 +625,19 @@ export class MergeToEpubAction extends BaseAction {
     const outputFilename = replaceContextVars(this.outputFilename);
     const bookTitle = replaceContextVars(this.bookTitle);
 
-    // 第一步：验证步骤 3 是否成功
-    // alignedKey 指向的数据应该是一个包含 success 字段的对象
-    const alignedResult = context.data[this.alignedKey] as
-      | Record<string, unknown>
-      | undefined;
-    if (!alignedResult || typeof alignedResult !== "object") {
-      throw new Error(`缺少对齐数据: ${this.alignedKey}`);
+    // Validate that the upstream concurrent result has usable output.
+    const countSummary = getMergeCountSummary(context.data, this.alignedKey);
+    if (!countSummary) {
+      throw new Error(`Missing aligned data: ${this.alignedKey}`);
     }
 
-    const successCount = (alignedResult["success"] as number) || 0;
-    const skippedCount = (alignedResult["skipped"] as number) || 0;
-    const availableCount = successCount + skippedCount;
-    if (availableCount === 0) {
-      throw new Error("步骤3没有成功的对齐结果");
-    }
-
-    logger.info(`开始生成ePub... (对齐结果 ${availableCount} 个块: 成功 ${successCount}, 续传跳过 ${skippedCount})`);
-
-    // 第二步：从文件系统读取所有对齐文件
+    // Read aligned files from disk.
     const alignedDirResolved = replaceContextVars(this.alignedDir);
     if (!fs.existsSync(alignedDirResolved)) {
-      throw new Error(`对齐文件目录不存在: ${alignedDirResolved}`);
+      throw new Error(`Aligned file directory does not exist: ${alignedDirResolved}`);
     }
 
-    // 读取 *.txt 文件并按文件名排序
+    // Read *.txt files in filename order.
     const alignedFiles = fs
       .readdirSync(alignedDirResolved)
       .filter((f) => f.endsWith(".txt"))
@@ -596,11 +646,17 @@ export class MergeToEpubAction extends BaseAction {
 
     if (alignedFiles.length === 0) {
       throw new Error(
-        `未找到文本文件: ${alignedDirResolved}/*.txt`
+        `No text files found: ${alignedDirResolved}/*.txt`
       );
     }
 
-    // 逐个读取文件内容
+    const availableCount =
+      countSummary.availableCount > 0 ? countSummary.availableCount : alignedFiles.length;
+    logger.info(
+      `Starting ePub generation... (aligned results ${availableCount} chunk(s): success ${countSummary.successCount}, resumed ${countSummary.skippedCount})`
+    );
+
+    // Read each aligned text file.
     const alignedTexts: string[] = [];
     for (const filepath of alignedFiles) {
       const content = fs.readFileSync(filepath, "utf-8").trim();
@@ -609,29 +665,30 @@ export class MergeToEpubAction extends BaseAction {
       }
     }
 
-    logger.info(`读取到 ${alignedTexts.length} 个对齐文件`);
+    logger.info(`Read ${alignedTexts.length} aligned file(s)`);
 
-    // 第三步：创建 ePub
-    // nodepub.document(metadata) 创建新的 ePub 文档
-    // metadata 必须包含 id、title、author、cover 四个必填字段
-    // cover 设为空字符串时 nodepub 会报错，所以用一个占位值
+    // Create ePub metadata and output paths.
+    const outputPath = path.join(outputDir, outputFilename);
+    const outputDirResolved = path.dirname(outputPath);
+    fs.mkdirSync(outputDirResolved, { recursive: true });
+
+    // nodepub requires id, title, author, and a non-empty cover path.
     const metadata = {
       id: "translated_book_001",
       title: bookTitle,
       author: "Translated",
       language: "zh",
-      cover: "", // nodepub 要求 cover 字段存在，但我们不需要封面图片
+      cover: path.join(outputDirResolved, ".conductor-epub-cover.png"),
     };
 
-    // 第四步：合并所有对齐文本
+    // Merge all aligned text.
     const mergedContent = alignedTexts.join("\n\n");
 
-    // 第五步：将对齐文本转换为 HTML（保留段落结构）
-    // 每个段落用 <p> 标签包裹，特殊字符需要转义防止 XSS
+    // Convert aligned text into HTML while preserving paragraph boundaries.
     let htmlContent = "<h1>Translated Content</h1>";
     for (const para of mergedContent.split("\n\n")) {
       if (para.trim()) {
-        // HTML 转义：& → &amp;  < → &lt;  > → &gt;  " → &quot;  ' → &#39;
+        // Escape HTML-sensitive characters before wrapping text in <p> tags.
         const escaped = para
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
@@ -642,87 +699,91 @@ export class MergeToEpubAction extends BaseAction {
       }
     }
 
-    // 第六步：写入 ePub 文件
-    // nodepub 的 writeEPUB(folder, filename) 会自动在 filename 后添加 .epub 后缀
-    // 所以如果 outputFilename 已经包含 .epub，需要去掉
-    const outputPath = path.join(outputDir, outputFilename);
-    const outputDirResolved = path.dirname(outputPath);
-    fs.mkdirSync(outputDirResolved, { recursive: true });
+    // nodepub.writeEPUB automatically appends .epub, so pass a basename without it.
+    const filenameWithoutExt = path.basename(outputFilename).replace(/\.epub$/i, "");
 
-    // 从 outputFilename 中去掉 .epub 后缀（nodepub 会自动添加）
-    const filenameWithoutExt = outputFilename.replace(/\.epub$/i, "");
-
+    let epubPath: string | null = null;
+    let epubError: string | undefined;
     try {
-      // nodepub 要求 cover 指向一个存在的图片文件
-      // 如果没有封面，我们跳过 nodepub，直接生成 TXT
-      // 因为 nodepub 的 cover 是必填字段且必须是有效图片路径
-      // 这里尝试创建，如果失败则只生成 TXT
+      // Create a tiny default cover so nodepub can generate an ePub.
+      fs.writeFileSync(
+        metadata.cover,
+        Buffer.from(DEFAULT_COVER_PNG_BASE64, "base64")
+      );
       const doc: NodepubDocument = nodepub.document(metadata);
       doc.addSection("Content", htmlContent);
       await doc.writeEPUB(outputDirResolved, filenameWithoutExt);
-      logger.info(`ePub生成完成: ${outputPath}`);
+      if (fs.existsSync(outputPath)) {
+        epubPath = outputPath;
+        logger.info(`ePub generated: ${outputPath}`);
+      } else {
+        epubError = `ePub generation finished without creating ${outputPath}`;
+        logger.warn(epubError);
+      }
     } catch (e) {
-      // nodepub 可能因为 cover 图片不存在而失败
-      // 此时退化为只生成 TXT 文件
-      logger.warn(`ePub生成失败（${e}），将只生成TXT文件`);
+      epubError = e instanceof Error ? e.message : String(e);
+      logger.warn(`ePub generation failed (${epubError}); generating TXT only`);
     }
 
-    // 第七步：生成 TXT 文件（便于查看纯文本）
+    // Always generate a TXT file for plain-text inspection.
     const txtPath = outputPath.replace(/\.epub$/i, ".txt");
     fs.writeFileSync(txtPath, mergedContent, "utf-8");
-    logger.info(`TXT文件生成: ${txtPath}`);
+    logger.info(`TXT file generated: ${txtPath}`);
 
     return new StepResult(
       this.nextStep,
       {
         [this.outputKey]: {
-          output_epub: outputPath,
+          output_epub: epubPath,
           output_txt: txtPath,
         },
       },
       {
-        epub_path: outputPath,
+        epub_path: epubPath,
         txt_path: txtPath,
         chapter_count: alignedTexts.length,
+        epub_created: epubPath !== null,
+        ...(epubError ? { epub_error: epubError } : {}),
       }
     );
   }
 }
 
 // ============================================================
-// ParseTranslationAction — 解析翻译结果
+// ParseTranslationAction - parse translation results
 // ============================================================
 
 /**
- * 解析翻译结果
+ * Parse translation results.
  *
- * 从 LLM 翻译响应中提取 ###SEGMENT### 格式的翻译内容。
- * 用于 ConcurrentAction 的后处理步骤。
+ * Extracts translation content from an LLM response that uses ###SEGMENT###
+ * markers. This is used as a ConcurrentAction post-processing step.
  *
- * LLM 翻译响应格式示例：
+ * Example LLM response format:
  *   ###SEGMENT1###
- *   这是第一段翻译内容...
+ *   First translated segment...
  *   ###SEGMENT2###
- *   这是第二段翻译内容...
+ *   Second translated segment...
  *
- * 正则解析逻辑：
- *   匹配 ###SEGMENT数字### 标记，提取其后到下一个标记（或文本末尾）之间的内容
+ * Regex behavior:
+ *   Match ###SEGMENT<number>### and capture text up to the next marker or EOF.
  *
- * 如果解析到的片段数量与预期不符，降级为返回原始响应文本（而非报错中断流程）。
+ * If the parsed segment count does not match the expectation, the action
+ * returns the original response instead of interrupting the workflow.
  */
 export class ParseTranslationAction extends BaseAction {
-  // responseKey：LLM 响应文本在 context.data 中的键名
+  // Context key for the LLM response text.
   private readonly responseKey: string;
-  // outputKey：解析后的翻译文本存入 context.data 的键名
+  // Context key for parsed translation text.
   private readonly outputKey: string;
-  // expectedSegments：预期的片段数量（每次只翻译一个块时为 1）
+  // Expected number of segments. Usually 1 when translating one chunk at a time.
   private readonly expectedSegments: number;
 
   constructor(
     responseKey: string = "llm_response",
     outputKey: string = "translated_text",
     expectedSegments: number = 1,
-    name: string = "解析翻译结果",
+    name: string = "Parse Translation Result",
     config: Record<string, unknown> = {}
   ) {
     super(name, config);
@@ -735,24 +796,23 @@ export class ParseTranslationAction extends BaseAction {
     const responseText =
       (context.data[this.responseKey] as string) || "";
 
-    // 正则解析 ###SEGMENT数字### 格式
-    // 拆解：
-    //   ###SEGMENT  — 字面量前缀
-    //   (\d+)       — 捕获组1：片段编号（数字）
-    //   ###         — 字面量后缀
-    //   \s*\n       — 标记后的可选空白和换行
-    //   (.*?)       — 捕获组2：片段内容（非贪婪匹配，尽可能少地匹配字符）
-    //   (?=###SEGMENT\d+###|$) — 前瞻断言：匹配到下一个标记或文本末尾时停止
+    // Parse the ###SEGMENT<number>### format:
+    //   ###SEGMENT  - literal prefix
+    //   (\d+)       - segment number
+    //   ###         - literal suffix
+    //   \s*\n       - optional whitespace and a newline after the marker
+    //   (.*?)       - non-greedy segment content
+    //   (?=...)     - stop before the next marker or at EOF
     //
-    // 标志 s（dotAll）：让 . 也能匹配换行符（等价于 Python 的 re.DOTALL）
+    // The s flag lets . match newlines.
     const pattern = /###SEGMENT(\d+)###\s*\n(.*?)(?=###SEGMENT\d+###|$)/gs;
     const matches = [...responseText.matchAll(pattern)];
 
     if (matches.length !== this.expectedSegments) {
       logger.error(
-        `期望 ${this.expectedSegments} 个片段，找到 ${matches.length} 个`
+        `Expected ${this.expectedSegments} segment(s), found ${matches.length}`
       );
-      // 降级：返回原始响应文本，避免翻译丢失
+      // Fallback: preserve the original response to avoid losing translation text.
       return new StepResult(
         "END",
         { [this.outputKey]: responseText },
@@ -760,8 +820,7 @@ export class ParseTranslationAction extends BaseAction {
       );
     }
 
-    // 提取第一个片段的内容（因为每次只翻译一个块）
-    // matches[0][2] 是第一个匹配的捕获组2（片段内容）
+    // Extract the first segment because this workflow translates one chunk at a time.
     const translatedText = matches.length > 0
       ? (matches[0]?.[2] ?? responseText).trim()
       : responseText;
