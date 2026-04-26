@@ -26,6 +26,7 @@ Date started: 2026-04-23
 | `src/pdf_to_images.ts` | Checked | 2026-04-25 | Page-range start validation bug fixed; tracked comments and user-facing strings translated to English. |
 | `src/workflow_actions/ebook_actions.ts` | Checked | 2026-04-26 | Merge/resume bugs fixed; tracked comments, logs, errors, and default action names translated to English. |
 | `src/workflow_actions/concurrent_actions.ts` | Checked | 2026-04-26 | Resume output-list bug fixed; tracked comments, logs, and error messages translated to English. |
+| `src/workflow_actions/base.ts` | Checked | 2026-04-26 | Error-history key-shape bug fixed; tracked comments, logs, and examples translated to English. |
 
 Status values: `Planned`, `Checking`, `Checked`, `Needs follow-up`.
 
@@ -92,6 +93,10 @@ Record bugs here immediately after checking each file.
 
 - Fixed on 2026-04-26: `ConcurrentAction.execute()` now preserves already-completed save-to-file output entries when resume skips cached files. Cached files still count as skipped in stats, but their `{ saved_file, item }` entries are included in `${outputKey}` so downstream steps receive a complete output list.
 
+### `src/workflow_actions/base.ts`
+
+- Fixed on 2026-04-26: `BaseAction.run()` now writes failed action records to `context.history` with the same `stepId` key used by normal workflow history entries. This keeps failed action records discoverable by consumers that read `entry["stepId"]` or use `WorkflowContext.getStepResult()`.
+
 ## Chinese Text Found
 
 Record Chinese comments, strings, prompts, and user-facing text here before translating them.
@@ -150,6 +155,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/workflow_actions/concurrent_actions.ts`
 
 - Translated on 2026-04-26: tracked comments, documentation comments, log messages, and thrown error messages were translated to English.
+
+### `src/workflow_actions/base.ts`
+
+- Translated on 2026-04-26: tracked comments, documentation comments, log messages, and examples were translated to English.
 
 ## Check Log
 
@@ -246,6 +255,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Chinese text details: see `Chinese Text Found` > `src/workflow_actions/concurrent_actions.ts`.
 - Follow-up needed: none for the tracked `src/workflow_actions/concurrent_actions.ts` work.
 
+### 2026-04-26 - `src/workflow_actions/base.ts`
+
+- Checked `BaseAction.run()` and `BaseAction.toString()`, with extra attention on metadata injection, error handling, cost preservation, history records, and language state.
+- Bug details: see `Bugs Found` > `src/workflow_actions/base.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/workflow_actions/base.ts`.
+- Follow-up needed: none for the tracked `src/workflow_actions/base.ts` work.
+
 ## Verification
 
 - `npm.cmd run typecheck` passed.
@@ -304,3 +320,8 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]"` returned no matches in `src/workflow_actions/concurrent_actions.ts` and `tests/concurrent_actions.test.ts` after the tracked English cleanup.
 - `npm.cmd run typecheck` passed after translating the tracked `src/workflow_actions/concurrent_actions.ts` text to English.
 - `npm.cmd test -- concurrent_actions` passed with 1 test after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]" src/workflow_actions/base.ts` found Chinese comments, logs, and examples during the focused check.
+- A focused code read of `src/workflow_actions/base.ts` and `src/workflow_engine.ts` confirmed the error-history key-shape bug: `BaseAction.run()` writes `step_id` on failure, while normal history entries use `stepId`.
+- `rg -n "[\p{Han}]"` returned no matches in `src/workflow_actions/base.ts` and `tests/base_action.test.ts` after the tracked English cleanup.
+- `npm.cmd run typecheck` passed after fixing the `src/workflow_actions/base.ts` error-history key-shape bug.
+- `npm.cmd test -- base_action` passed with 2 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
