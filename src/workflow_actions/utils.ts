@@ -1,23 +1,23 @@
 /**
- * 工作流动作工具函数
+ * Workflow action utility functions.
  *
- * 包含文件校验、目录管理、成本数据处理、错误格式化等通用功能。
- * 均为纯函数，不依赖任何动作类。
+ * Includes shared helpers for file validation, directory management, cost
+ * metadata, error formatting, path templates, and nested data lookup.
  *
- * 注：create_simple_action / create_llm_action 两个工厂函数不迁移。
- * 理由：仅是构造函数的薄包装，TS 有类型提示后直接 new 更清晰，无保留价值。
+ * Note: create_simple_action and create_llm_action are not migrated here.
+ * They were thin constructor wrappers; direct construction is clearer in TS.
  */
 
-// fs 是 Node.js 内置的文件系统模块，提供文件读写、状态查询（statSync）、存在性检查（existsSync）等功能
+// Node's file-system module, used for reads, writes, stat checks, and existence checks.
 import fs from "fs";
-// path 是 Node.js 内置的路径处理模块，提供路径拼接（path.join）等功能
+// Node's path module, used for path joins and extension checks.
 import path from "path";
 
 /**
- * 简易日志对象
+ * Lightweight logger wrapper.
  *
- * 当前直接包装 console 方法，后续可替换为 winston / pino 等正式日志库。
- * 之所以不直接用 console.debug/info/error，是为了统一入口便于未来切换。
+ * It currently delegates to console methods. Keeping a single wrapper makes it
+ * easier to switch this module to a formal logger later.
  */
 const logger = {
   debug: (msg: string) => console.debug(msg),
@@ -26,260 +26,196 @@ const logger = {
 };
 
 /**
- * 验证 JSON 文件是否有效且完整
+ * Validate that a JSON file exists, is large enough, parses correctly, and
+ * contains non-empty data.
  *
- * 依次检查：文件是否存在、大小是否达标、能否解析、内容是否非空。
- *
- * @param filepath 文件路径
- * @param minSize  最小文件大小（字节），默认 10
+ * @param filepath File path.
+ * @param minSize Minimum file size in bytes. Defaults to 10.
  */
 export function isValidJsonFile(filepath: string, minSize = 10): boolean {
-  // 第一步：检查文件是否存在
   if (!fs.existsSync(filepath)) return false;
 
-  // 第二步：检查文件大小是否达标
-  // 为什么要检查大小？极小的文件（如只有几字节）通常是空白或损坏的，
-  // 跳过它们可以避免后续无意义的 JSON 解析开销
   const stat = fs.statSync(filepath);
   if (stat.size < minSize) {
-    logger.debug(`文件过小，可能无效: ${filepath} (${stat.size}字节)`);
+    logger.debug(`File is too small and may be invalid: ${filepath} (${stat.size} bytes)`);
     return false;
   }
 
   try {
-    // 第三步：读取文件并尝试 JSON 解析
     const content = fs.readFileSync(filepath, "utf-8");
-    // JSON.parse 返回值可能是 object / array / string / number / boolean / null
-    // 所以用 unknown 类型接收，后续逐一判断
     const data: unknown = JSON.parse(content);
 
-    // 第四步：逐一排除"语法正确但内容为空"的边界情况
-    // JSON 中 null 是合法值，但对业务来说等于没有数据
     if (data === null || data === undefined) {
-      logger.debug(`文件内容为null/undefined: ${filepath}`);
+      logger.debug(`File content is null/undefined: ${filepath}`);
       return false;
     }
 
-    // 空对象 {} — 语法合法但没有有效数据
-    // typeof null === "object"，但前面已排除 null，这里是安全的
     if (
       typeof data === "object" &&
       !Array.isArray(data) &&
       Object.keys(data as object).length === 0
     ) {
-      logger.debug(`文件内容为空字典: ${filepath}`);
+      logger.debug(`File content is an empty object: ${filepath}`);
       return false;
     }
 
-    // 空数组 [] — 同理，合法但无数据
     if (Array.isArray(data) && data.length === 0) {
-      logger.debug(`文件内容为空列表: ${filepath}`);
+      logger.debug(`File content is an empty array: ${filepath}`);
       return false;
     }
 
-    // 空字符串 "" 或纯空白字符串 "   " — JSON 中 "\"\"" 是合法值
     if (typeof data === "string" && !data.trim()) {
-      logger.debug(`文件内容为空字符串: ${filepath}`);
+      logger.debug(`File content is an empty string: ${filepath}`);
       return false;
     }
 
-    // 通过所有检查，文件有效
     return true;
   } catch (e) {
-    // JSON.parse 抛出 SyntaxError 说明文件内容不是合法 JSON
     if (e instanceof SyntaxError) {
-      logger.debug(`JSON格式错误: ${filepath} - ${e}`);
+      logger.debug(`Invalid JSON format: ${filepath} - ${e}`);
     } else {
-      // 其他错误（权限不足、磁盘 I/O 等）用 error 级别记录
-      logger.error(`读取文件失败: ${filepath} - ${e}`);
+      logger.error(`Failed to read file: ${filepath} - ${e}`);
     }
     return false;
   }
 }
 
 /**
- * 验证输出文件是否已存在且有效（断点续存用）
+ * Validate that an output file already exists and is usable for resume.
  *
- * 根据文件扩展名选择不同的验证策略：
- *   - .json → 调用 isValidJsonFile()，尝试解析 JSON 并检查内容非空
- *   - 其他（.txt 等）→ 只要文件存在且非空即视为有效
+ * Strategy by extension:
+ *   - .json -> parse and verify non-empty JSON via isValidJsonFile().
+ *   - other files -> valid when the file exists and is non-empty.
  *
- * 这是对 isValidJsonFile 的上层封装，用于并发处理的断点续存检查。
- * Python 版在 concurrent_actions.py 中内联实现，这里抽取为独立函数便于复用。
- *
- * @param filepath 文件路径
- * @returns true 表示文件有效（应跳过处理），false 表示需要（重新）处理
+ * @param filepath File path.
+ * @returns true when the file is valid and work can be skipped.
  */
 export function isValidOutputFile(filepath: string): boolean {
-  // 第一步：检查文件是否存在
   if (!fs.existsSync(filepath)) return false;
 
-  // 第二步：检查文件大小是否大于 0（空文件视为无效）
   const stat = fs.statSync(filepath);
   if (stat.size === 0) return false;
 
-  // 第三步：根据扩展名选择验证方式
-  // path.extname() 返回含点号的扩展名，如 ".json"、".txt"
   const ext = path.extname(filepath).toLowerCase();
 
   if (ext === ".json") {
-    // JSON 文件：需要完整验证（可解析 + 内容非空）
-    // 如果文件是写到一半中断的半截 JSON，isValidJsonFile 会返回 false → 触发重新处理
     return isValidJsonFile(filepath);
   }
 
-  // 非 JSON 文件（如 .txt、.md 等）：只要文件存在且非空即视为有效
-  // 因为无法像 JSON 那样通过解析来检测内容完整性，
-  // 所以需要配合原子写入（先写 .tmp 再 rename）来保证文件要么完整要么不存在
+  // Non-JSON files cannot be parsed for completeness, so callers rely on
+  // atomic writes to guarantee files are either complete or absent.
   return true;
 }
 
 /**
- * 原子写入文件：先写入临时文件，完成后 rename 替换目标文件
+ * Atomically write a file by writing a temporary file first, then renaming it.
  *
- * 为什么不直接 writeFileSync？
- *   如果进程在 writeFileSync 执行过程中被中断（崩溃、Ctrl+C、断电），
- *   目标文件可能只写入了部分内容，变成"半截文件"。
- *   下次断点续存时，非 JSON 文件只检查"是否存在且非空"，
- *   会把半截文件误判为有效，导致数据丢失。
+ * This prevents resume checks from treating partially written files as valid
+ * after an interrupted process.
  *
- * 原子写入的原理：
- *   1. 清理上次崩溃可能遗留的 .tmp 文件
- *   2. 将内容写入 filepath + ".tmp" 临时文件
- *   3. 用 fs.renameSync() 将 .tmp 替换为目标文件
- *   rename 在同一文件系统上是原子操作，所以目标文件要么是旧的完整版，要么是新的完整版，
- *   不会出现"写到一半"的状态。
- *
- * @param filepath 目标文件路径
- * @param content  要写入的内容字符串
+ * @param filepath Target file path.
+ * @param content String content to write.
  */
 export function atomicWriteFileSync(filepath: string, content: string): void {
-  // 临时文件路径：在原文件名后追加 ".tmp"
-  // 例如 "output/page_001.json" → "output/page_001.json.tmp"
   const tmpPath = filepath + ".tmp";
 
-  // 第一步：清理上次崩溃可能遗留的 .tmp 文件
-  // 如果上次运行在写入 .tmp 后、rename 前崩溃，.tmp 文件会残留
   try {
     if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
   } catch {
-    // 删除失败不影响后续逻辑（文件可能已被其他进程清理）
+    // A stale temp file may have already been removed by another process.
   }
 
   try {
-    // 第二步：确保目标文件的父目录存在
     fs.mkdirSync(path.dirname(filepath), { recursive: true });
-
-    // 第三步：将内容写入临时文件
     fs.writeFileSync(tmpPath, content, "utf-8");
-
-    // 第四步：原子替换——将临时文件 rename 为目标文件
-    // renameSync 在同一文件系统上是原子操作
-    // 在 Windows 上，renameSync 也能覆盖已存在的目标文件（Node.js 内部处理了兼容性）
     fs.renameSync(tmpPath, filepath);
   } catch (e) {
-    // 写入或 rename 失败时，清理临时文件避免残留
     try {
       if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
     } catch {
-      // 清理失败不再抛出，避免掩盖原始错误
+      // Preserve the original write/rename error.
     }
     throw e;
   }
 }
 
 /**
- * 确保目录结构存在，创建必要的子目录
+ * Ensure a base directory and its required subdirectories exist.
  *
- * @param baseDir 基础目录
- * @param subdirs 子目录列表，默认 ["outputs"]
- * @returns 包含所有路径的字典，key 为目录名，value 为绝对路径
+ * @param baseDir Base directory.
+ * @param subdirs Subdirectory names. Defaults to ["outputs"].
+ * @returns A path map where each key is the directory name.
  */
 export function ensureDirectoryStructure(
   baseDir: string,
   subdirs: string[] = ["outputs"]
 ): Record<string, string> {
-  // 第一步：创建基础目录
-  // { recursive: true } 等同于 mkdir -p，目录已存在时不报错，也会自动创建中间目录
   fs.mkdirSync(baseDir, { recursive: true });
 
-  // 第二步：遍历子目录列表，逐一创建并记录路径
-  // 返回值示例：{ base: "/project", outputs: "/project/outputs" }
   const paths: Record<string, string> = { base: baseDir };
   for (const subdir of subdirs) {
     const subdirPath = path.join(baseDir, subdir);
     fs.mkdirSync(subdirPath, { recursive: true });
-    // 用子目录名作为 key，方便调用方按名称取路径：paths["outputs"]
     paths[subdir] = subdirPath;
   }
 
-  logger.debug(`目录结构已确保: ${baseDir} (子目录: ${subdirs})`);
+  logger.debug(`Directory structure ensured: ${baseDir} (subdirs: ${subdirs})`);
   return paths;
 }
 
 /**
- * 创建全零的成本信息字典
+ * Create a zero-cost metadata object.
  *
- * 用作默认值，避免调用方处理 undefined。
+ * Used as a safe default so callers do not need to handle undefined cost data.
  */
 export function createZeroCostInfo(): Record<string, unknown> {
-  // 返回值结构对应 LLM API 的计费字段
-  // pricing_available: false 表示没有实际的定价数据（只是占位默认值）
   return {
-    input_tokens: 0,       // 输入 token 数
-    output_tokens: 0,      // 输出 token 数
-    total_tokens: 0,       // 总 token 数（= input + output）
-    input_cost: 0.0,       // 输入费用（美元）
-    output_cost: 0.0,      // 输出费用（美元）
-    total_cost: 0.0,       // 总费用
-    pricing_available: false, // 是否有可用的定价信息
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    input_cost: 0.0,
+    output_cost: 0.0,
+    total_cost: 0.0,
+    currency: "CNY",
+    pricing_available: false,
   };
 }
 
 /**
- * 安全获取成本信息，处理各种可能的数据结构
+ * Safely read cost metadata from a StepResult or history metadata object.
  *
- * - 兼容 output_tokens / completion_tokens 两种字段命名
- * - 缺失字段自动补零
- * - metadata 无效时返回零成本
+ * - Accepts both output_tokens and completion_tokens.
+ * - Fills missing numeric fields with zero.
+ * - Returns zero-cost metadata when metadata is invalid.
  *
- * @param metadata 元数据字典（来自 StepResult.metadata 或 context.history 条目）
+ * @param metadata Metadata from StepResult.metadata or a context.history entry.
  */
 export function safeGetCostInfo(
   metadata: Record<string, unknown>
 ): Record<string, unknown> {
-  // 第一步：防御性检查 metadata 本身
-  // 调用方可能传入 null / undefined / 非对象值
   if (!metadata || typeof metadata !== "object") {
     return createZeroCostInfo();
   }
 
-  // 第二步：从 metadata 中取出 cost 字段
-  // metadata 结构示例：{ cost: { input_tokens: 100, output_tokens: 50, ... }, model: "gpt-4" }
   const cost = metadata["cost"];
-  // cost 可能不存在、是 null、是数组等，都视为无效
   if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
     return createZeroCostInfo();
   }
 
   const costObj = cost as Record<string, unknown>;
 
-  // 第三步：兼容不同 API 的字段命名
-  // OpenAI API 返回 completion_tokens，Anthropic API 返回 output_tokens
-  // 统一使用 output_tokens 作为标准字段名
   if (!("output_tokens" in costObj)) {
     costObj["output_tokens"] =
       "completion_tokens" in costObj ? costObj["completion_tokens"] : 0;
   }
 
-  // 第四步：补全可能缺失的字段，确保返回值结构完整
-  // 这样调用方可以直接取值而无需判断字段是否存在
   const defaults: Record<string, unknown> = {
     total_cost: 0.0,
     input_cost: 0.0,
     output_cost: 0.0,
     input_tokens: 0,
     total_tokens: 0,
+    currency: "CNY",
   };
   for (const [field, def] of Object.entries(defaults)) {
     if (!(field in costObj)) {
@@ -291,14 +227,12 @@ export function safeGetCostInfo(
 }
 
 /**
- * 格式化错误上下文信息
+ * Format error context into a single readable log line.
  *
- * 将异常、项目索引、item、步骤配置拼成一行可读字符串，供日志输出。
- *
- * @param error      异常对象
- * @param item       正在处理的数据项（可选）
- * @param stepConfig 步骤配置（可选，用于提取 type / model）
- * @param index      项目索引（可选）
+ * @param error Error object or thrown value.
+ * @param item Current item being processed.
+ * @param stepConfig Optional step config used to extract type/model.
+ * @param index Optional item index.
  */
 export function formatErrorContext(
   error: unknown,
@@ -306,120 +240,82 @@ export function formatErrorContext(
   stepConfig?: Record<string, unknown>,
   index?: number
 ): string {
-  // 第一步：提取错误类名
-  // 如果是标准 Error 子类（如 TypeError, RangeError），取 constructor.name
-  // 否则降级为通用的 "Error"
   const errName = error instanceof Error ? error.constructor.name : "Error";
-  // 用数组收集各部分信息，最后用 " | " 连接成一行
-  // 输出示例："错误: TypeError: xxx | 项目索引: 3 | 步骤类型: llm_call | 模型: gpt-4"
-  const parts = [`错误: ${errName}: ${String(error)}`];
+  const parts = [`Error: ${errName}: ${String(error)}`];
 
-  // 第二步：可选字段——项目索引（在批量处理中标识第几个数据项出错）
   if (index !== undefined) {
-    parts.push(`项目索引: ${index}`);
+    parts.push(`Item index: ${index}`);
   }
 
-  // 第三步：可选字段——数据项内容预览
   if (item !== undefined) {
     let itemStr = String(item);
-    // 截断过长的内容，避免日志行过长导致可读性下降
     if (itemStr.length > 100) {
       itemStr = itemStr.slice(0, 100) + "...";
     }
-    parts.push(`项目: ${itemStr}`);
+    parts.push(`Item: ${itemStr}`);
   }
 
-  // 第四步：可选字段——步骤配置信息（类型和模型名）
   if (stepConfig) {
     const stepType = stepConfig["type"] ?? "unknown";
-    parts.push(`步骤类型: ${stepType}`);
+    parts.push(`Step type: ${stepType}`);
     if ("model" in stepConfig) {
-      parts.push(`模型: ${stepConfig["model"]}`);
+      parts.push(`Model: ${stepConfig["model"]}`);
     }
   }
 
-  // 用管道符分隔各部分，方便在日志中快速定位
   return parts.join(" | ");
 }
 
 /**
- * 格式化路径模板，将模板中的占位符替换为实际值。
+ * Format a path template by replacing placeholders with values.
  *
- * 支持两种占位符格式：
- *   {key}      — 直接替换为变量值的字符串形式，例如 {name} → "test"
- *   {key:04d}  — 零补全数字格式，例如 {index:04d}（index=3）→ "0003"
+ * Supported placeholders:
+ *   {key}     -> string form of vars[key]
+ *   {key:04d} -> zero-padded number, for example index=3 becomes "0003"
  *
- * 使用示例：
- *   formatPathTemplate("output/{name}.json", { name: "test" })
- *   → "output/test.json"
- *
- *   formatPathTemplate("page_{index:04d}.json", { index: 3 })
- *   → "page_0003.json"
- *
- * @param template 包含占位符的路径字符串
- * @param vars     替换变量的字典，键名对应占位符中的变量名
- * @throws Error   模板中引用了 vars 中不存在的变量时抛出
+ * @param template Path string containing placeholders.
+ * @param vars Replacement variables keyed by placeholder name.
+ * @throws Error when the template references a missing variable.
  */
 export function formatPathTemplate(
   template: string,
   vars: Record<string, unknown>
 ): string {
-  // 正则表达式拆解：
-  //   \{(\w+)        — 匹配 { 开头，捕获变量名（字母/数字/下划线）
-  //   (?::0(\d+)d)?  — 可选：匹配 :04d 这种格式，捕获宽度数字（如 "4"）
-  //   \}             — 匹配 } 结尾
-  // 回调函数参数：_ 是完整匹配，key 是变量名，width 是宽度数字（可能是 undefined）
   return template.replace(/\{(\w+)(?::0(\d+)d)?\}/g, (_, key: string, width?: string) => {
-    // 变量名不在字典里，直接报错，避免生成错误路径
-    if (!(key in vars)) throw new Error(`路径模板缺少变量: ${key}`);
+    if (!(key in vars)) throw new Error(`Path template is missing variable: ${key}`);
     const val = vars[key];
-    // 有宽度且值是数字 → 用 padStart 在左侧补零到指定长度
-    // 例如 val=3, width="4" → String(3).padStart(4, "0") → "0003"
     if (width !== undefined && typeof val === "number") {
       return String(val).padStart(parseInt(width), "0");
     }
-    // 无宽度要求 → 直接转字符串
     return String(val);
   });
 }
 
 /**
- * 从嵌套对象中按点路径取值
+ * Read a value from a nested object by dot-separated path.
  *
- * 支持形如 "result.translated_text" 的路径。
- * 不含点号时等同于 obj[key]。
- * 路径中任意层级不存在时返回 defaultValue。
+ * Examples:
+ *   deepGet({ a: { b: { c: 42 } } }, "a.b.c") -> 42
+ *   deepGet({ a: { b: 1 } }, "a.x.y", "default") -> "default"
+ *   deepGet({ name: "test" }, "name") -> "test"
  *
- * 使用示例：
- *   deepGet({ a: { b: { c: 42 } } }, "a.b.c")       → 42
- *   deepGet({ a: { b: 1 } }, "a.x.y", "默认值")      → "默认值"
- *   deepGet({ name: "test" }, "name")                  → "test"（无点号时等同于 obj["name"]）
- *
- * @param data         源数据对象
- * @param keyPath      点分隔路径，如 "a.b.c"
- * @param defaultValue 路径不存在时的默认值，默认 undefined
+ * @param data Source object.
+ * @param keyPath Dot-separated path, such as "a.b.c".
+ * @param defaultValue Value returned when the path is missing.
  */
 export function deepGet(
   data: Record<string, unknown>,
   keyPath: string,
   defaultValue: unknown = undefined
 ): unknown {
-  // 从顶层对象开始，逐层向下取值
-  // split(".") 将 "a.b.c" 拆成 ["a", "b", "c"]，然后 for...of 逐段遍历
-  // 为什么用 for...of 而不是 reduce？因为遇到中间层级不存在时需要提前 return defaultValue，
-  // reduce 没有提前退出机制，而 for 循环可以随时 return 中断
   let current: unknown = data;
   for (const key of keyPath.split(".")) {
-    // 当前层级不是对象（可能是 null / 基本类型 / 数组），无法继续取子属性
     if (!current || typeof current !== "object" || Array.isArray(current)) {
       return defaultValue;
     }
     const obj = current as Record<string, unknown>;
-    // 当前层级没有目标 key，路径中断
     if (!(key in obj)) return defaultValue;
-    // 进入下一层
     current = obj[key];
   }
-  // 遍历完所有层级后，current 就是目标值
   return current;
 }

@@ -22,6 +22,7 @@ Date started: 2026-04-23
 | `src/index.ts` | Checked | 2026-04-27 | Package entry exports fixed; no Chinese text found. |
 | `src/core/workflow_runner.ts` | Checked | 2026-04-23 | Related start-node bug fixed; tracked Chinese text translated to English. |
 | `src/utils.ts` | Checked | 2026-04-27 | Image preprocessing now fails loudly for requested local images that cannot be included; tracked Chinese text translated to English. |
+| `src/workflow_actions/utils.ts` | Checked | 2026-04-27 | Zero-cost metadata now includes the project currency field; tracked Chinese text translated to English. |
 | `src/workflow_actions/llm_actions.ts` | Checked | 2026-04-23 | Multimodal prompt interpolation bug fixed; tracked Chinese text translated to English. |
 | `src/workflow_actions/io_actions.ts` | Checked | 2026-04-24 | Merge action empty-input result-shape bug fixed; tracked Chinese text translated to English. |
 | `src/workflow_actions/data_actions.ts` | Checked | 2026-04-24 | Processor output validation bug fixed; tracked comments translated to English and cleaned up from corrupted encoding. |
@@ -49,6 +50,10 @@ Record bugs here immediately after checking each file.
 ### `src/utils.ts`
 
 - Fixed on 2026-04-27: `processMessagesWithImages()` now throws when a requested `{ type: "image", path: ... }` block points to a missing file or the image cannot be converted. This prevents `callLlmApi()` from continuing with an incomplete multimodal payload.
+
+### `src/workflow_actions/utils.ts`
+
+- Fixed on 2026-04-27: `createZeroCostInfo()` now returns `currency: "CNY"`, and `safeGetCostInfo()` fills a missing currency with `CNY` while preserving any existing currency value. This keeps zero-cost metadata consistent with `calculateCost()` and `aggregateCosts()`.
 
 ### `src/exceptions.ts`
 
@@ -130,6 +135,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/utils.ts`
 
 - Translated on 2026-04-27: tracked module comments, section headings, function documentation, inline comments, log messages, thrown error messages, and focused utility test comments/names were translated to English.
+
+### `src/workflow_actions/utils.ts`
+
+- Translated on 2026-04-27: tracked module comments, function documentation, inline comments, log messages, error formatting labels, thrown error messages, and focused utility test names were translated to English.
 
 ### `src/exceptions.ts`
 
@@ -246,6 +255,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/utils.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/utils.ts`.
 - Follow-up needed: none for the tracked `src/utils.ts` work.
+
+### 2026-04-27 - `src/workflow_actions/utils.ts`
+
+- Checked JSON file validation, resume output-file validation, atomic writes, directory setup, cost helpers, error formatting, path-template formatting, and deep data lookup.
+- Bug details: see `Bugs Found` > `src/workflow_actions/utils.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/workflow_actions/utils.ts`.
+- Follow-up needed: none for the tracked `src/workflow_actions/utils.ts` work.
 
 ### 2026-04-23 - `src/core/workflow_runner.ts`
 
@@ -387,3 +403,8 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]" src/utils.ts tests/utils.test.ts` returned no matches after the tracked English cleanup.
 - `npm.cmd run typecheck` passed after fixing the tracked `src/utils.ts` image preprocessing bug and English cleanup.
 - `npm.cmd test -- utils` passed with 17 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]" src/workflow_actions/utils.ts` found Chinese comments, logs, error labels, and thrown error messages during the focused `src/workflow_actions/utils.ts` check.
+- A focused code read of `src/workflow_actions/utils.ts`, `src/workflow_actions/concurrent_actions.ts`, and `src/cost_calculator.ts` confirmed the zero-cost metadata mismatch: `createZeroCostInfo()` omits `currency: "CNY"`, while `calculateCost()` and `aggregateCosts()` include it and `ConcurrentAction.execute()` uses the zero-cost helper when no costs are collected.
+- `rg -n "[\p{Han}]" src/workflow_actions/utils.ts tests/workflow_actions_utils.test.ts` returned no matches after the tracked English cleanup.
+- `npm.cmd run typecheck` passed after fixing the tracked `src/workflow_actions/utils.ts` zero-cost metadata bug and English cleanup.
+- `npm.cmd test -- workflow_actions_utils` passed with 5 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
