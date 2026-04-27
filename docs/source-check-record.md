@@ -15,6 +15,7 @@ Date started: 2026-04-23
 | --- | --- | --- | --- |
 | `workflows/chat/run.ts` | Checked | 2026-04-23 | Bug and Chinese text were found in the previous focused check. Source changes are outside this tracker. |
 | `src/model_caller.ts` | Checked | 2026-04-23 | No direct source-code bug or Chinese text was found in the previous focused check. |
+| `src/exceptions.ts` | Checked | 2026-04-27 | Cost currency wording fixed; tracked Chinese text translated to English. |
 | `src/workflow_loader.ts` | Checked | 2026-04-23 | Loader bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_parser.ts` | Checked | 2026-04-23 | Parser validation bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_engine.ts` | Checked | 2026-04-23 | Start-node and action-name logging bugs fixed; tracked Chinese text translated to English. |
@@ -43,6 +44,10 @@ Record bugs here immediately after checking each file.
 ### `src/model_caller.ts`
 
 - No bugs found in the previous focused check.
+
+### `src/exceptions.ts`
+
+- Fixed on 2026-04-27: `CostInfo.total_cost` no longer describes the value as USD. The exception comments now match the current project cost system, which uses CNY and displays values with `¥`.
 
 ### `src/workflow_loader.ts`
 
@@ -117,6 +122,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 
 - No Chinese text found in the previous focused check.
 
+### `src/exceptions.ts`
+
+- Translated on 2026-04-27: tracked module comments, interface comments, field comments, usage example text, constructor comments, `toString()` comments, and `toString()` output labels were translated to English.
+
 ### `src/workflow_loader.ts`
 
 - Translated on 2026-04-23: tracked comments and user-facing strings in this file were translated to English.
@@ -186,6 +195,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/model_caller.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/model_caller.ts`.
 - Follow-up needed: none recorded.
+
+### 2026-04-27 - `src/exceptions.ts`
+
+- Checked the cost-carrying exception type, its `CostInfo` and `UsageInfo` interfaces, constructor behavior, `name` assignment, and `toString()` output.
+- Bug details: see `Bugs Found` > `src/exceptions.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/exceptions.ts`.
+- Follow-up needed: none for the tracked `src/exceptions.ts` work.
 
 ### 2026-04-23 - `src/workflow_loader.ts`
 
@@ -346,3 +362,7 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `npm.cmd run typecheck` passed after fixing `src/index.ts`.
 - `npm.cmd run build` passed after fixing `src/index.ts`, confirming the package entry and declarations compile.
 - `node -e "import('./dist/index.js')..."` succeeded after fixing `src/index.ts` and confirmed the built package entry exposes exported API names. It also printed the existing model-config load message from `src/model_caller.ts`, which is outside this focused entry-file fix.
+- `rg -n "[\p{Han}]" src/exceptions.ts` found Chinese comments and string output labels during the focused `src/exceptions.ts` check.
+- `models.yaml` and `src/cost_calculator.ts` confirm the current cost system uses CNY/`¥`, while `src/exceptions.ts` documents `CostInfo.total_cost` as USD.
+- `rg -n "[\p{Han}]" src/exceptions.ts` returned no matches after translating the tracked `src/exceptions.ts` text to English.
+- `npm.cmd run typecheck` passed after fixing the `src/exceptions.ts` currency wording and tracked language.
