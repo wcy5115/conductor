@@ -1,60 +1,60 @@
 /**
- * llm_client.ts 单元测试
+ * Unit tests for llm_client.ts.
  *
- * 测试策略：
- *   - 使用 vi.mock 模拟外部依赖（utils.ts、cost_calculator.ts）
- *   - 使用 vi.stubGlobal 模拟全局 fetch 函数
- *   - 通过 process.env.LLM_API_ENABLE 控制安全熔断开关
- *   - 所有 sleep 等待被 mock 掉以加速测试
+ * Test strategy:
+ *   - Use vi.mock to mock external dependencies: utils.ts and cost_calculator.ts.
+ *   - Use vi.stubGlobal to mock the global fetch function.
+ *   - Control the safety gate through process.env.LLM_API_ENABLE.
+ *   - Mock sleep waits to keep tests fast.
  *
- * 覆盖范围：
- *   - callLlmApi(): 成功响应、各种 HTTP 错误码、网络错误、重试机制、安全熔断
- *   - chat(): 成功调用、两种错误抛出
- *   - isLlmEnabled(): 通过环境变量间接测试
+ * Coverage:
+ *   - callLlmApi(): success responses, HTTP errors, network errors, retries, and safety gate.
+ *   - chat(): successful calls and both error paths.
+ *   - isLlmEnabled(): tested indirectly through environment variables.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ============================================================
-// Mock 外部依赖
+// Mock external dependencies.
 // ============================================================
 
-// mock utils.ts —— processMessagesWithImages 默认原样返回消息列表
+// Mock utils.ts: processMessagesWithImages returns the message list unchanged by default.
 vi.mock("../src/utils.js", () => ({
   processMessagesWithImages: vi.fn((msgs: unknown[]) => msgs),
 }));
 
-// mock cost_calculator.ts —— estimateTokensFromText 默认返回 10
+// Mock cost_calculator.ts: estimateTokensFromText returns 10 by default.
 vi.mock("../src/cost_calculator.js", () => ({
   estimateTokensFromText: vi.fn(() => 10),
 }));
 
-// 导入被测模块（必须在 vi.mock 之后）
+// Import the module under test. This must happen after vi.mock.
 import { callLlmApi, chat } from "../src/llm_client";
 import type { Message, LlmResult } from "../src/llm_client";
 import { processMessagesWithImages } from "../src/utils.js";
 import { estimateTokensFromText } from "../src/cost_calculator.js";
 
 // ============================================================
-// 辅助工具
+// Test helpers
 // ============================================================
 
 /**
- * 创建一个模拟的 fetch Response 对象
+ * Create a mocked fetch Response object.
  *
- * @param status  HTTP 状态码
- * @param body    响应体（对象会 JSON 序列化，字符串直接返回）
- * @returns 模拟的 Response 对象，具有 status、json()、text() 等属性
+ * @param status HTTP status code.
+ * @param body Response body; objects are JSON-serialized and strings are returned directly.
+ * @returns Mocked Response object with status, json(), text(), and related properties.
  */
 function mockResponse(status: number, body: Record<string, unknown> | string): Response {
   const isJson = typeof body === "object";
   return {
     status,
-    // json() 返回 Promise<解析后的对象>
+    // json() returns Promise<parsed object>.
     json: () => Promise.resolve(isJson ? body : JSON.parse(body as string)),
-    // text() 返回 Promise<原始文本>
+    // text() returns Promise<raw text>.
     text: () => Promise.resolve(isJson ? JSON.stringify(body) : (body as string)),
-    // 以下属性是 Response 接口必需的，但测试中不使用
+    // The remaining properties are required by the Response interface but unused in tests.
     ok: status >= 200 && status < 300,
     headers: new Headers(),
     redirected: false,
@@ -72,11 +72,11 @@ function mockResponse(status: number, body: Record<string, unknown> | string): R
 }
 
 /**
- * 构建标准的成功响应体（OpenAI Chat Completions 格式）
+ * Build a standard successful response body in OpenAI Chat Completions format.
  *
- * @param content       AI 回复文本
- * @param finishReason  完成原因，默认 "stop"
- * @param usage         token 用量，传 null 表示不包含 usage 字段
+ * @param content AI response text.
+ * @param finishReason Finish reason, defaulting to "stop".
+ * @param usage Token usage; pass null to omit the usage field.
  */
 function successBody(
   content: string,
@@ -90,35 +90,35 @@ function successBody(
   return body;
 }
 
-/** 标准测试参数：消息列表、API URL、API 密钥、模型名称 */
+/** Standard test parameters: messages, API URL, API key, and model name. */
 const testMessages: Message[] = [{ role: "user", content: "Hello" }];
 const testUrl = "https://api.example.com/v1/chat/completions";
 const testKey = "test-api-key-123";
 const testModel = "gpt-4o";
 
 // ============================================================
-// 测试套件
+// Test suite
 // ============================================================
 
 describe("callLlmApi", () => {
-  /** 模拟的 fetch 函数，每个测试前重新创建 */
+  /** Mocked fetch function, recreated before each test. */
   let mockFetch: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    // 创建新的 mock fetch 并注入全局
+    // Create a fresh mock fetch and install it globally.
     mockFetch = vi.fn();
     vi.stubGlobal("fetch", mockFetch);
 
-    // 重置所有 mock 的调用记录
+    // Reset all mock call records.
     vi.mocked(processMessagesWithImages).mockClear();
     vi.mocked(estimateTokensFromText).mockClear();
 
-    // 默认启用 LLM 调用（绕过安全熔断）
+    // Enable LLM calls by default to bypass the safety gate.
     process.env.LLM_API_ENABLE = "true";
 
-    // mock setTimeout/clearTimeout 以跳过重试等待
-    // vi.useFakeTimers 会导致 Promise 行为异常，所以只 mock sleep 中用到的 setTimeout
-    // 实际做法：让 sleep 瞬间 resolve（通过 mock setTimeout 立即执行回调）
+    // Mock setTimeout/clearTimeout to skip retry waits.
+    // vi.useFakeTimers can interfere with Promises, so only mock the setTimeout used by sleep.
+    // The callback runs immediately, making sleep resolve instantly.
     vi.spyOn(globalThis, "setTimeout").mockImplementation((cb: TimerHandler) => {
       if (typeof cb === "function") cb();
       return 0 as unknown as ReturnType<typeof setTimeout>;
@@ -126,24 +126,24 @@ describe("callLlmApi", () => {
   });
 
   afterEach(() => {
-    // 清理环境变量和 mock
+    // Clean up environment variables and mocks.
     delete process.env.LLM_API_ENABLE;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
   // ============================================================
-  // 成功响应测试
+  // Successful responses
   // ============================================================
 
-  it("成功调用：finish_reason=stop，返回 content 和 usage", async () => {
-    // 模拟 API 返回标准成功响应
+  it("successful call: finish_reason=stop returns content and usage", async () => {
+    // Mock a standard successful API response.
     mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("Hi there!")));
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel);
 
     expect(status).toBe("success");
-    // result 是 LlmResult 类型，包含 content 和 usage
+    // result is LlmResult and contains content and usage.
     const llmResult = result as LlmResult;
     expect(llmResult.content).toBe("Hi there!");
     expect(llmResult.usage.prompt_tokens).toBe(10);
@@ -152,14 +152,14 @@ describe("callLlmApi", () => {
     expect(llmResult.usage.token_source).toBe("api");
   });
 
-  it("成功调用：API 未提供 usage 时，使用 estimateTokensFromText 估算", async () => {
-    // usage 为 null → 响应体中不包含 usage 字段
-    mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("回复内容", "stop", null)));
+  it("successful call: estimates tokens when the API does not provide usage", async () => {
+    // usage null means the response body does not include a usage field.
+    mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("Reply content", "stop", null)));
 
-    // estimateTokensFromText 第一次调用估算 prompt，第二次估算 completion
+    // The first estimateTokensFromText call estimates prompt tokens; the second estimates completion tokens.
     vi.mocked(estimateTokensFromText)
-      .mockReturnValueOnce(20)   // prompt 估算
-      .mockReturnValueOnce(8);   // completion 估算
+      .mockReturnValueOnce(20)   // Prompt estimate.
+      .mockReturnValueOnce(8);   // Completion estimate.
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel);
 
@@ -167,14 +167,14 @@ describe("callLlmApi", () => {
     const llmResult = result as LlmResult;
     expect(llmResult.usage.prompt_tokens).toBe(20);
     expect(llmResult.usage.completion_tokens).toBe(8);
-    expect(llmResult.usage.total_tokens).toBe(28);  // 20 + 8
+    expect(llmResult.usage.total_tokens).toBe(28);  // 20 + 8.
     expect(llmResult.usage.token_source).toBe("estimated");
 
-    // 验证 estimateTokensFromText 被调用了两次
+    // Verify that estimateTokensFromText was called twice.
     expect(estimateTokensFromText).toHaveBeenCalledTimes(2);
   });
 
-  it("成功调用：content 前后有空白字符时被 trim", async () => {
+  it("successful call: trims leading and trailing content whitespace", async () => {
     mockFetch.mockResolvedValueOnce(
       mockResponse(200, successBody("  Hello World  ")),
     );
@@ -186,10 +186,10 @@ describe("callLlmApi", () => {
   });
 
   // ============================================================
-  // finish_reason 处理测试
+  // finish_reason handling
   // ============================================================
 
-  it("finish_reason=length 且有内容：返回 success 并保留内容", async () => {
+  it("finish_reason=length with content returns success and keeps content", async () => {
     mockFetch.mockResolvedValueOnce(
       mockResponse(200, successBody("Truncated...", "length")),
     );
@@ -200,7 +200,7 @@ describe("callLlmApi", () => {
     expect((result as LlmResult).content).toBe("Truncated...");
   });
 
-  it("finish_reason=length 且无内容：返回 fatal_error", async () => {
+  it("finish_reason=length with no content returns fatal_error", async () => {
     mockFetch.mockResolvedValueOnce(
       mockResponse(200, successBody("", "length")),
     );
@@ -209,11 +209,11 @@ describe("callLlmApi", () => {
 
     expect(status).toBe("fatal_error");
     const err = result as Record<string, unknown>;
-    // 错误信息应提到截断和 max_tokens
-    expect(err.error).toContain("截断");
+    // The error should mention truncation and max_tokens.
+    expect(err.error).toContain("truncated");
   });
 
-  it("未知 finish_reason 且有内容：返回 success", async () => {
+  it("unknown finish_reason with content returns success", async () => {
     mockFetch.mockResolvedValueOnce(
       mockResponse(200, successBody("Some content", "content_filter")),
     );
@@ -224,7 +224,7 @@ describe("callLlmApi", () => {
     expect((result as LlmResult).content).toBe("Some content");
   });
 
-  it("未知 finish_reason 且无内容：返回 fatal_error", async () => {
+  it("unknown finish_reason with no content returns fatal_error", async () => {
     mockFetch.mockResolvedValueOnce(
       mockResponse(200, successBody("", "content_filter")),
     );
@@ -236,10 +236,10 @@ describe("callLlmApi", () => {
   });
 
   // ============================================================
-  // HTTP 错误码测试
+  // HTTP status code errors
   // ============================================================
 
-  it("HTTP 400：返回 fatal_error（客户端错误）", async () => {
+  it("HTTP 400 returns fatal_error for client error", async () => {
     mockFetch.mockResolvedValueOnce(mockResponse(400, "Invalid request"));
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel);
@@ -248,7 +248,7 @@ describe("callLlmApi", () => {
     expect((result as Record<string, unknown>).error).toContain("400");
   });
 
-  it("HTTP 401：返回 fatal_error（认证错误）", async () => {
+  it("HTTP 401 returns fatal_error for authentication error", async () => {
     mockFetch.mockResolvedValueOnce(mockResponse(401, "Unauthorized"));
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel);
@@ -257,7 +257,7 @@ describe("callLlmApi", () => {
     expect((result as Record<string, unknown>).error).toContain("401");
   });
 
-  it("HTTP 403：返回 fatal_error（权限错误）", async () => {
+  it("HTTP 403 returns fatal_error for permission error", async () => {
     mockFetch.mockResolvedValueOnce(mockResponse(403, "Forbidden"));
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel);
@@ -266,7 +266,7 @@ describe("callLlmApi", () => {
     expect((result as Record<string, unknown>).error).toContain("403");
   });
 
-  it("HTTP 404：返回 fatal_error（资源未找到）", async () => {
+  it("HTTP 404 returns fatal_error for missing resource", async () => {
     mockFetch.mockResolvedValueOnce(mockResponse(404, "Not found"));
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel);
@@ -275,7 +275,7 @@ describe("callLlmApi", () => {
     expect((result as Record<string, unknown>).error).toContain("404");
   });
 
-  it("HTTP 418（未知状态码）：返回 fatal_error", async () => {
+  it("HTTP 418 returns fatal_error for unknown status code", async () => {
     mockFetch.mockResolvedValueOnce(mockResponse(418, "I'm a teapot"));
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel);
@@ -285,28 +285,28 @@ describe("callLlmApi", () => {
   });
 
   // ============================================================
-  // 重试机制测试
+  // Retry behavior
   // ============================================================
 
-  it("HTTP 429（速率限制）：重试后成功", async () => {
-    // 第一次返回 429，第二次返回 200
+  it("HTTP 429 rate limit succeeds after retry", async () => {
+    // First request returns 429, second returns 200.
     mockFetch
       .mockResolvedValueOnce(mockResponse(429, "Rate limit exceeded"))
       .mockResolvedValueOnce(mockResponse(200, successBody("Success after retry")));
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel, {
       max_retries: 3,
-      retry_delay: 0.001,  // 极短等待
+      retry_delay: 0.001,  // Very short wait.
     });
 
     expect(status).toBe("success");
     expect((result as LlmResult).content).toBe("Success after retry");
-    // fetch 应该被调用了 2 次（第一次 429，第二次成功）
+    // fetch should be called twice: 429 first, success second.
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("HTTP 429：重试次数用尽后返回 retriable_error", async () => {
-    // 所有请求都返回 429
+  it("HTTP 429 returns retriable_error after retries are exhausted", async () => {
+    // Every request returns 429.
     mockFetch.mockResolvedValue(mockResponse(429, "Rate limit exceeded"));
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel, {
@@ -319,7 +319,7 @@ describe("callLlmApi", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("HTTP 5xx（服务器错误）：重试后成功", async () => {
+  it("HTTP 5xx server error succeeds after retry", async () => {
     mockFetch
       .mockResolvedValueOnce(mockResponse(500, "Internal server error"))
       .mockResolvedValueOnce(mockResponse(200, successBody("Recovered")));
@@ -333,7 +333,7 @@ describe("callLlmApi", () => {
     expect((result as LlmResult).content).toBe("Recovered");
   });
 
-  it("HTTP 5xx：重试次数用尽后返回 retriable_error", async () => {
+  it("HTTP 5xx returns retriable_error after retries are exhausted", async () => {
     mockFetch.mockResolvedValue(mockResponse(503, "Service unavailable"));
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel, {
@@ -345,7 +345,7 @@ describe("callLlmApi", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("HTTP 408（请求超时）：重试后成功", async () => {
+  it("HTTP 408 request timeout succeeds after retry", async () => {
     mockFetch
       .mockResolvedValueOnce(mockResponse(408, "Request Timeout"))
       .mockResolvedValueOnce(mockResponse(200, successBody("OK")));
@@ -360,11 +360,11 @@ describe("callLlmApi", () => {
   });
 
   // ============================================================
-  // 网络层错误测试
+  // Network-level errors
   // ============================================================
 
-  it("AbortError（客户端超时）：重试次数用尽返回 retriable_error", async () => {
-    // 模拟 AbortController 超时抛出的 AbortError
+  it("AbortError client timeout returns retriable_error after retries are exhausted", async () => {
+    // Mock AbortError thrown by AbortController timeout.
     const abortError = new DOMException("The operation was aborted", "AbortError");
     mockFetch.mockRejectedValue(abortError);
 
@@ -374,10 +374,10 @@ describe("callLlmApi", () => {
     });
 
     expect(status).toBe("retriable_error");
-    expect((result as Record<string, unknown>).error).toContain("超时");
+    expect((result as Record<string, unknown>).error).toContain("timed out");
   });
 
-  it("SSL 错误：重试次数用尽返回 retriable_error", async () => {
+  it("SSL error returns retriable_error after retries are exhausted", async () => {
     const sslError = new Error("SSL certificate problem: unable to get local issuer certificate");
     mockFetch.mockRejectedValue(sslError);
 
@@ -392,7 +392,7 @@ describe("callLlmApi", () => {
     expect(err.error_type).toBe("ssl_error");
   });
 
-  it("代理错误：重试次数用尽返回 retriable_error", async () => {
+  it("proxy error returns retriable_error after retries are exhausted", async () => {
     const proxyError = new Error("proxy connection refused");
     mockFetch.mockRejectedValue(proxyError);
 
@@ -403,11 +403,11 @@ describe("callLlmApi", () => {
 
     expect(status).toBe("retriable_error");
     const err = result as Record<string, unknown>;
-    expect(err.error).toContain("代理");
+    expect(err.error).toContain("Proxy");
     expect(err.error_type).toBe("proxy_error");
   });
 
-  it("重定向过多：直接返回 fatal_error（不重试）", async () => {
+  it("too many redirects returns fatal_error without retrying", async () => {
     const redirectError = new Error("Too many redirect");
     mockFetch.mockRejectedValue(redirectError);
 
@@ -418,15 +418,15 @@ describe("callLlmApi", () => {
 
     expect(status).toBe("fatal_error");
     const err = result as Record<string, unknown>;
-    expect(err.error).toContain("重定向");
+    expect(err.error).toContain("Redirect");
     expect(err.error_type).toBe("redirect_error");
-    // 重定向错误不应重试，fetch 只被调用 1 次
+    // Redirect errors should not retry, so fetch is called once.
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("分块传输错误（chunked）：重试次数用尽返回 retriable_error", async () => {
-    // 模拟 HTTP chunked transfer encoding 传输中断
-    // 对应 Python 版的 requests.exceptions.ChunkedEncodingError
+  it("chunked transfer error returns retriable_error after retries are exhausted", async () => {
+    // Mock an interrupted HTTP chunked transfer encoding response.
+    // Equivalent to requests.exceptions.ChunkedEncodingError in Python.
     const chunkedError = new Error("chunked transfer encoding error: incomplete data");
     mockFetch.mockRejectedValue(chunkedError);
 
@@ -437,14 +437,14 @@ describe("callLlmApi", () => {
 
     expect(status).toBe("retriable_error");
     const err = result as Record<string, unknown>;
-    expect(err.error).toContain("数据传输中断");
+    expect(err.error).toContain("Transfer interrupted");
     expect(err.error_type).toBe("chunked_encoding_error");
-    // 应该重试了 2 次
+    // It should retry twice.
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("分块传输错误（truncated）：重试后成功", async () => {
-    // 第一次 truncated 错误，第二次成功
+  it("truncated transfer error succeeds after retry", async () => {
+    // First request throws a truncated error, second succeeds.
     const truncatedError = new Error("response body truncated");
     mockFetch
       .mockRejectedValueOnce(truncatedError)
@@ -460,7 +460,7 @@ describe("callLlmApi", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("通用网络错误：重试次数用尽返回 retriable_error", async () => {
+  it("generic network error returns retriable_error after retries are exhausted", async () => {
     const networkError = new Error("ECONNREFUSED");
     mockFetch.mockRejectedValue(networkError);
 
@@ -473,21 +473,21 @@ describe("callLlmApi", () => {
     expect((result as Record<string, unknown>).error).toContain("ECONNREFUSED");
   });
 
-  it("非 Error 对象被抛出：返回 fatal_error", async () => {
-    // 模拟 throw "string" 的情况（极少见）
+  it("thrown non-Error object returns fatal_error", async () => {
+    // Mock the rare case of throw "string".
     mockFetch.mockRejectedValue("something went wrong");
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel);
 
     expect(status).toBe("fatal_error");
-    expect((result as Record<string, unknown>).error).toContain("未知错误");
+    expect((result as Record<string, unknown>).error).toContain("Unknown error");
   });
 
   // ============================================================
-  // 请求参数构建测试
+  // Request parameter construction
   // ============================================================
 
-  it("extra_headers 和 extra_params 被正确传递到 fetch", async () => {
+  it("passes extra_headers and extra_params to fetch", async () => {
     mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("OK")));
 
     await callLlmApi(testMessages, testUrl, testKey, testModel, {
@@ -497,16 +497,16 @@ describe("callLlmApi", () => {
       extra_params: { thinking: { type: "enabled" } },
     });
 
-    // 获取 fetch 的调用参数
+    // Get fetch call arguments.
     const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(testUrl);
 
-    // 验证 headers 中包含自定义头
+    // Verify custom headers are included.
     const headers = init.headers as Record<string, string>;
     expect(headers["X-Custom"]).toBe("value123");
     expect(headers["Authorization"]).toBe(`Bearer ${testKey}`);
 
-    // 验证 body 中包含额外参数
+    // Verify the body includes extra parameters.
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body.model).toBe(testModel);
     expect(body.temperature).toBe(0.9);
@@ -514,43 +514,43 @@ describe("callLlmApi", () => {
     expect(body.thinking).toEqual({ type: "enabled" });
   });
 
-  it("processMessagesWithImages 被调用以预处理消息", async () => {
+  it("calls processMessagesWithImages to preprocess messages", async () => {
     mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("OK")));
 
     await callLlmApi(testMessages, testUrl, testKey, testModel);
 
-    // 验证预处理函数被调用，且传入了原始消息列表
+    // Verify the preprocessing function receives the original message list.
     expect(processMessagesWithImages).toHaveBeenCalledWith(testMessages);
   });
 
   // ============================================================
-  // 安全熔断测试
+  // Safety gate
   // ============================================================
 
-  it("LLM_API_ENABLE 未设置时：直接返回 fatal_error，不发送请求", async () => {
-    // 删除环境变量 → isLlmEnabled() 返回 false → 熔断，不调用 fetch
+  it("returns fatal_error without sending a request when LLM_API_ENABLE is unset", async () => {
+    // Delete the environment variable so isLlmEnabled() returns false and fetch is not called.
     delete process.env.LLM_API_ENABLE;
 
     const [content, usage] = await callLlmApi(testMessages, testUrl, testKey, testModel);
 
-    // 验证直接返回 fatal_error，不发送任何网络请求
+    // Verify it returns fatal_error directly without sending any network request.
     expect(mockFetch).not.toHaveBeenCalled();
     expect(content).toBe("fatal_error");
-    expect(usage.error).toMatch(/冻结/);
+    expect(usage.error).toMatch(/disabled/);
   });
 
-  it("LLM_API_ENABLE=false 时：直接返回 fatal_error，不发送请求", async () => {
+  it("returns fatal_error without sending a request when LLM_API_ENABLE=false", async () => {
     process.env.LLM_API_ENABLE = "false";
 
     const [content, usage] = await callLlmApi(testMessages, testUrl, testKey, testModel);
 
-    // 验证直接返回 fatal_error，不发送任何网络请求
+    // Verify it returns fatal_error directly without sending any network request.
     expect(mockFetch).not.toHaveBeenCalled();
     expect(content).toBe("fatal_error");
-    expect(usage.error).toMatch(/冻结/);
+    expect(usage.error).toMatch(/disabled/);
   });
 
-  it("LLM_API_ENABLE=1 时：使用真实密钥", async () => {
+  it("uses the real key when LLM_API_ENABLE=1", async () => {
     process.env.LLM_API_ENABLE = "1";
 
     mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("OK")));
@@ -562,7 +562,7 @@ describe("callLlmApi", () => {
     expect(headers["Authorization"]).toBe(`Bearer ${testKey}`);
   });
 
-  it("LLM_API_ENABLE=yes 时：使用真实密钥", async () => {
+  it("uses the real key when LLM_API_ENABLE=yes", async () => {
     process.env.LLM_API_ENABLE = "yes";
 
     mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("OK")));
@@ -575,11 +575,11 @@ describe("callLlmApi", () => {
   });
 
   // ============================================================
-  // 重试次数用尽兜底测试
+  // Retry exhaustion fallback
   // ============================================================
 
-  it("所有重试用尽后的兜底返回 retriable_error", async () => {
-    // 所有请求都返回 408（会重试但最终用尽）
+  it("returns retriable_error after all retries are exhausted", async () => {
+    // Every request returns 408, which retries and eventually exhausts attempts.
     mockFetch.mockResolvedValue(mockResponse(408, "Timeout"));
 
     const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel, {
@@ -592,7 +592,7 @@ describe("callLlmApi", () => {
 });
 
 // ============================================================
-// chat() 简化接口测试
+// chat() simplified interface
 // ============================================================
 
 describe("chat", () => {
@@ -614,7 +614,7 @@ describe("chat", () => {
     vi.unstubAllGlobals();
   });
 
-  it("成功调用：返回 LlmResult 对象", async () => {
+  it("successful call returns an LlmResult object", async () => {
     mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("Hello!")));
 
     const result = await chat("Hi", testUrl, testKey, testModel);
@@ -623,36 +623,36 @@ describe("chat", () => {
     expect(result.usage.total_tokens).toBe(15);
   });
 
-  it("可重试错误：抛出包含 '可重试' 的 Error", async () => {
-    // 所有请求返回 429 → 重试用尽 → retriable_error
+  it("retriable error throws an Error containing 'retriable'", async () => {
+    // Every request returns 429, exhausting retries and producing retriable_error.
     mockFetch.mockResolvedValue(mockResponse(429, "Rate limit"));
 
     await expect(
       chat("Hi", testUrl, testKey, testModel, { max_retries: 1, retry_delay: 0.001 }),
-    ).rejects.toThrow("可重试");
+    ).rejects.toThrow("retriable");
   });
 
-  it("致命错误：抛出包含 '致命错误' 的 Error", async () => {
-    // 返回 400 → fatal_error
+  it("fatal error throws an Error containing 'fatal'", async () => {
+    // A 400 response produces fatal_error.
     mockFetch.mockResolvedValueOnce(mockResponse(400, "Bad request"));
 
     await expect(
       chat("Hi", testUrl, testKey, testModel),
-    ).rejects.toThrow("致命错误");
+    ).rejects.toThrow("fatal");
   });
 
-  it("自动将 prompt 包装为消息列表", async () => {
+  it("automatically wraps prompt as a message list", async () => {
     mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("OK")));
 
     await chat("Test prompt", testUrl, testKey, testModel);
 
-    // 验证 processMessagesWithImages 收到的是 [{ role: "user", content: "Test prompt" }]
+    // Verify processMessagesWithImages receives [{ role: "user", content: "Test prompt" }].
     expect(processMessagesWithImages).toHaveBeenCalledWith([
       { role: "user", content: "Test prompt" },
     ]);
   });
 
-  it("options 参数被传递到 callLlmApi", async () => {
+  it("passes options to callLlmApi", async () => {
     mockFetch.mockResolvedValueOnce(mockResponse(200, successBody("OK")));
 
     await chat("Hi", testUrl, testKey, testModel, {
@@ -660,7 +660,7 @@ describe("chat", () => {
       max_tokens: 500,
     });
 
-    // 验证 fetch 收到的 body 中包含 temperature 和 max_tokens
+    // Verify the fetch body includes temperature and max_tokens.
     const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body.temperature).toBe(0.2);

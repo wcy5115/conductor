@@ -1,45 +1,44 @@
 /**
- * LLM 客户端模块
+ * LLM client module.
  *
- * 本模块是整个项目与大语言模型（LLM）交互的唯一出口，职责包括：
- *   1. 将用户消息发送给 OpenAI 兼容的 API（如 OpenAI、Azure、OpenRouter 等）
- *   2. 处理 API 响应：提取生成文本、token 用量，判断成功/可重试/致命错误
- *   3. 内置自动重试机制：对速率限制(429)、服务器错误(5xx)、网络超时等自动重试
+ * This module is the single project entry point for LLM interaction. It handles:
+ *   1. Sending user messages to OpenAI-compatible APIs such as OpenAI, Azure, and OpenRouter.
+ *   2. Handling API responses: generated text, token usage, and success/retry/fatal status.
+ *   3. Automatic retries for rate limits (429), server errors (5xx), network timeouts, and similar failures.
  *
- * 已拆分到其他模块的功能：
- *   - 图片预处理（processMessagesWithImages） → utils.ts
- *   - Token 估算（estimateTokensFromText）    → cost_calculator.ts
+ * Features moved to other modules:
+ *   - Image preprocessing (processMessagesWithImages) -> utils.ts
+ *   - Token estimation (estimateTokensFromText)       -> cost_calculator.ts
  *
- * 对外暴露两个主要函数：
- *   - callLlmApi()  —— 底层调用，接受完整的消息列表，返回 [status, result] 元组
- *   - chat()        —— 简化接口，传入单条 prompt 字符串即可，自动包装为消息列表
+ * Public functions:
+ *   - callLlmApi() - low-level call that accepts a full message list and returns [status, result].
+ *   - chat()       - simplified interface that wraps a single prompt string as a message list.
  */
 
-// processMessagesWithImages: 预处理消息列表，将本地图片路径自动转换为 Base64 Data URL
-// 原本位于 llm_client.ts 内部，因为与图片工具函数（imageToBase64、getImageMimeType）关系更紧密，
-// 已移至 utils.ts，让 llm_client.ts 只专注于 HTTP 调用逻辑
+// processMessagesWithImages: preprocess messages and convert local image paths to Base64 Data URLs.
+// This used to live in llm_client.ts, but it belongs with image helpers such as
+// imageToBase64 and getImageMimeType, so llm_client.ts can focus on HTTP calls.
 import { processMessagesWithImages } from "./utils.js";
 
-// estimateTokensFromText: 根据中英文字符数估算 token 数量
-// 原本位于 llm_client.ts 内部，因为属于 token/成本计算逻辑，
-// 已移至 cost_calculator.ts，让成本相关功能集中管理
+// estimateTokensFromText: estimate token counts from text length.
+// This used to live in llm_client.ts, but token and cost logic is centralized in cost_calculator.ts.
 import { estimateTokensFromText } from "./cost_calculator.js";
 
 // ============================================================
-// 简易日志器
+// Simple logger
 // ============================================================
 
 /**
- * 简易日志器，将不同级别的日志输出到控制台。
+ * Simple logger that writes different log levels to the console.
  *
- * 没有使用 src/core/logging.ts 中的完整日志系统，是因为 llm_client 作为底层模块
- * 需要保持依赖最小化，避免循环依赖。
+ * This module does not use the full logging system in src/core/logging.ts because
+ * llm_client is a low-level module and should keep dependencies small to avoid cycles.
  *
- * 四个级别分别对应 console 的不同方法：
- *   - info:    一般信息（如 token 估算结果）
- *   - warning: 警告信息（如 API 响应缺少 usage 字段）
- *   - error:   错误信息（如图片转换失败）
- *   - debug:   调试信息（如图片转换成功的确认）
+ * The four levels map to console methods:
+ *   - info:    general information, such as token estimates.
+ *   - warning: warnings, such as an API response missing usage data.
+ *   - error:   errors, such as failed image conversion.
+ *   - debug:   debug details, such as successful image conversion.
  */
 const logger = {
   info: (msg: string) => console.info(msg),
@@ -49,20 +48,20 @@ const logger = {
 };
 
 // ============================================================
-// 类型定义
+// Type definitions
 // ============================================================
 
 /**
- * 消息内容块的类型定义
+ * Message content block type.
  *
- * 多模态消息（如同时包含文本和图片）的 content 字段是一个数组，
- * 数组中每个元素就是一个 MessageContent。
+ * For multimodal messages, such as messages with both text and images, the
+ * content field is an array and each item is a MessageContent value.
  *
- * 示例 —— 文本块：  { type: "text", text: "请描述这张图片" }
- * 示例 —— 图片块：  { type: "image_url", image_url: { url: "data:image/png;base64,..." } }
+ * Text block example:  { type: "text", text: "Describe this image" }
+ * Image block example: { type: "image_url", image_url: { url: "data:image/png;base64,..." } }
  *
- * [key: string]: unknown 表示允许携带任意额外字段（等价于 Python 的 dict[str, Any]）
- * 这样设计是因为不同 API 提供商可能有自定义字段
+ * [key: string]: unknown allows arbitrary extra fields, similar to Python's
+ * dict[str, Any]. This is useful because providers may define custom fields.
  */
 export interface MessageContent {
   type: string;
@@ -70,19 +69,19 @@ export interface MessageContent {
 }
 
 /**
- * 单条聊天消息的类型定义
+ * Single chat message type.
  *
- * role 表示发言角色，常见值：
- *   - "system":    系统提示词，设置 AI 的行为方式
- *   - "user":      用户输入
- *   - "assistant": AI 的回复
+ * role is the speaker role. Common values:
+ *   - "system":    system instructions that shape AI behavior.
+ *   - "user":      user input.
+ *   - "assistant": AI response.
  *
- * content 有两种形态：
- *   - string: 纯文本消息，最常见的形式
- *     示例：{ role: "user", content: "你好" }
- *   - MessageContent[]: 多模态消息，包含文本 + 图片等多种内容块
- *     示例：{ role: "user", content: [
- *       { type: "text", text: "这是什么？" },
+ * content has two forms:
+ *   - string: plain text message, the most common form.
+ *     Example: { role: "user", content: "Hello" }
+ *   - MessageContent[]: multimodal message with text, images, or other content blocks.
+ *     Example: { role: "user", content: [
+ *       { type: "text", text: "What is this?" },
  *       { type: "image_url", image_url: { url: "data:..." } }
  *     ]}
  */
@@ -92,16 +91,16 @@ export interface Message {
 }
 
 /**
- * Token 用量统计的类型定义
+ * Token usage statistics type.
  *
- * 每次 API 调用后都会返回（或估算）token 用量，用于成本计算。
+ * Each API call returns, or estimates, token usage for cost calculation.
  *
- * prompt_tokens:      输入消息消耗的 token 数
- * completion_tokens:  AI 生成回复消耗的 token 数
- * total_tokens:       以上两者之和
- * token_source:       用量数据的来源
- *   - "api":       API 响应中直接提供（准确）
- *   - "estimated": 本地通过字符数估算（有误差，但保证成本计算不会缺失）
+ * prompt_tokens:      tokens consumed by input messages.
+ * completion_tokens:  tokens consumed by the generated response.
+ * total_tokens:       sum of prompt and completion tokens.
+ * token_source:       source of the usage data.
+ *   - "api":       provided directly by the API response, so it is accurate.
+ *   - "estimated": estimated locally from text length, with some error but enough for cost tracking.
  */
 export interface UsageDict {
   prompt_tokens: number;
@@ -111,10 +110,10 @@ export interface UsageDict {
 }
 
 /**
- * LLM 调用成功时的返回结果
+ * Result returned by a successful LLM call.
  *
- * content: AI 生成的文本回复
- * usage:   本次调用的 token 用量统计
+ * content: text generated by the AI.
+ * usage:   token usage statistics for this call.
  */
 export interface LlmResult {
   content: string;
@@ -122,26 +121,26 @@ export interface LlmResult {
 }
 
 /**
- * LLM 调用的状态码（三态）
+ * LLM call status.
  *
- * "success":         调用成功，result 中包含有效内容
- * "retriable_error": 可重试的错误（如网络超时、速率限制），调用方可以稍后重试
- * "fatal_error":     致命错误（如认证失败、参数错误），重试无意义
+ * "success":         call succeeded and result contains valid content.
+ * "retriable_error": retryable error, such as a network timeout or rate limit.
+ * "fatal_error":     fatal error, such as authentication failure or invalid parameters.
  */
 export type LlmStatus = "success" | "retriable_error" | "fatal_error";
 
 /**
- * LLM 调用的可选参数
+ * Optional LLM call parameters.
  *
- * temperature:    生成随机性，0.0 最确定 ~ 2.0 最随机，默认 0.7
- * max_tokens:     生成回复的最大 token 数，默认 2000
- * timeout:        单次 HTTP 请求的超时时间（秒），默认 120
- * max_retries:    最大重试次数，默认 3
- * retry_delay:    重试间隔基数（秒），实际间隔 = retry_delay × 第几次重试，默认读环境变量
- * extra_headers:  附加的 HTTP 请求头，例如 OpenRouter 需要的 HTTP-Referer
- *                 类型 Record<string, string> 等价于 Python 的 dict[str, str]
- * extra_params:   附加的请求体参数，例如某些 API 的思考模式(thinking)开关
- *                 类型 Record<string, unknown> 等价于 Python 的 dict[str, Any]
+ * temperature:    generation randomness, from 0.0 most deterministic to 2.0 most random; default 0.7.
+ * max_tokens:     maximum number of generated tokens; default 2000.
+ * timeout:        per-request HTTP timeout in seconds; default 120.
+ * max_retries:    maximum retry attempts; default 3.
+ * retry_delay:    base retry delay in seconds; actual delay = retry_delay x attempt number.
+ * extra_headers:  additional HTTP headers, such as the HTTP-Referer required by OpenRouter.
+ *                 Record<string, string> is similar to Python's dict[str, str].
+ * extra_params:   additional request-body parameters, such as a provider-specific thinking mode.
+ *                 Record<string, unknown> is similar to Python's dict[str, Any].
  */
 export interface LlmCallOptions {
   temperature?: number;
@@ -154,50 +153,52 @@ export interface LlmCallOptions {
 }
 
 /**
- * 安全熔断检查：LLM 调用是否已启用
+ * Safety gate: whether LLM calls are enabled.
  *
- * 读取环境变量 LLM_API_ENABLE，只有明确设为以下值时才允许调用（不区分大小写）：
+ * Reads the LLM_API_ENABLE environment variable. Calls are allowed only when it
+ * is explicitly set to one of these values, case-insensitively:
  *   "true" / "1" / "yes" / "on"
- * 其他情况一律返回 false（默认冻结），防止误触产生 API 费用。
+ * All other values return false by default, preventing accidental API costs.
  *
- * 对应 Python 版 safety.py 的 is_llm_enabled()
+ * Equivalent to is_llm_enabled() in the Python safety.py module.
  */
 function isLlmEnabled(): boolean {
-  // 从环境变量读取开关值，未设置时默认 "false"（冻结状态）
+  // Read the switch from the environment; unset means "false" and therefore disabled.
   const val = (process.env.LLM_API_ENABLE ?? "false").toLowerCase();
-  // 只有这几个值视为"启用"，其他一律冻结
+  // Only these values are considered enabled.
   return ["true", "1", "yes", "on"].includes(val);
 }
 
 // ============================================================
-// 核心 API 调用
+// Core API call
 // ============================================================
 
 /**
- * 统一的 LLM API 调用函数（底层核心）
+ * Unified low-level LLM API call.
  *
- * 这是整个项目中所有 LLM 调用的统一入口。它封装了完整的 HTTP 请求-响应流程：
- *   1. 预处理消息（图片路径 → Base64）
- *   2. 构建 HTTP 请求（OpenAI Chat Completions 兼容格式）
- *   3. 发送请求并处理响应
- *   4. 错误分类与自动重试
+ * This is the unified entry point for all project LLM calls. It wraps the full
+ * HTTP request/response flow:
+ *   1. Preprocess messages, including image paths -> Base64.
+ *   2. Build an OpenAI Chat Completions-compatible HTTP request.
+ *   3. Send the request and handle the response.
+ *   4. Classify errors and retry automatically.
  *
- * 返回值是一个元组 [status, result]：
- *   - status 为 "success" 时，result 是 LlmResult（包含 content 和 usage）
- *   - status 为 "retriable_error" 时，result 是 { error: string }，调用方可稍后重试
- *   - status 为 "fatal_error" 时，result 是 { error: string }，重试无意义
+ * The return value is a [status, result] tuple:
+ *   - when status is "success", result is LlmResult with content and usage.
+ *   - when status is "retriable_error", result is { error: string } and callers may retry later.
+ *   - when status is "fatal_error", result is { error: string } and retrying is not useful.
  *
- * 自动重试的错误类型：
- *   - HTTP 429（速率限制）、5xx（服务器错误）、408（请求超时）
- *   - 网络层错误：超时（AbortError）、SSL 错误、代理错误
- *   - 重试间隔采用线性退避：第 N 次重试等待 retry_delay × N 秒
+ * Automatically retried error types:
+ *   - HTTP 429 rate limits, 5xx server errors, and 408 request timeouts.
+ *   - Network errors such as AbortError timeouts, SSL errors, and proxy errors.
+ *   - Retry delay uses linear backoff: attempt N waits retry_delay x N seconds.
  *
- * @param messages  聊天消息列表（可包含图片路径，会自动转换）
- * @param apiUrl    API 端点 URL，如 "https://api.openai.com/v1/chat/completions"
- * @param apiKey    API 密钥
- * @param model     模型名称，如 "gpt-4o"、"claude-3-sonnet"
- * @param options   可选参数（温度、最大 token 数、超时、重试设置等）
- * @returns [status, result] 元组
+ * @param messages Chat messages, which may contain image paths that are converted automatically.
+ * @param apiUrl API endpoint URL, such as "https://api.openai.com/v1/chat/completions".
+ * @param apiKey API key.
+ * @param model Model name, such as "gpt-4o" or "claude-3-sonnet".
+ * @param options Optional parameters such as temperature, max tokens, timeout, and retry settings.
+ * @returns [status, result] tuple.
  */
 export async function callLlmApi(
   messages: Message[],
@@ -206,85 +207,82 @@ export async function callLlmApi(
   model: string,
   options: LlmCallOptions = {}
 ): Promise<[LlmStatus, LlmResult | Record<string, unknown>]> {
-  // 从 options 对象中解构出各个参数，并为每个参数设置默认值
+  // Destructure parameters from options and assign defaults.
   //
-  // 语法说明：const { key = 默认值 } = 对象
-  //   - 如果对象中有 key 属性且值不是 undefined → 使用传入的值
-  //   - 如果对象中没有 key 属性，或值为 undefined → 使用等号右边的默认值
+  // Syntax note: const { key = defaultValue } = object
+  //   - If object.key exists and is not undefined, use the provided value.
+  //   - If object.key is missing or undefined, use the default on the right.
   //
-  // 示例：假设调用方传入 options = { temperature: 0.3 }
-  //   temperature = 0.3    ← 调用方传了，用传入的值
-  //   max_tokens  = 2000   ← 调用方没传，用默认值 2000
-  //   timeout     = 300    ← 调用方没传，用默认值 300
-  //   ...以此类推
+  // Example: if the caller passes options = { temperature: 0.3 }
+  //   temperature = 0.3    <- caller provided it.
+  //   max_tokens  = 2000   <- caller did not provide it, so use the default.
+  //   timeout     = 300    <- caller did not provide it, so use the default.
+  //   ...and so on.
   const {
-    temperature = 0.7,      // 生成随机性，0=确定性最高，1=最随机，默认 0.7
-    max_tokens = 50000,     // 最大输出 token 数，默认 50000
-    timeout = 300,          // 请求超时秒数，默认 300 秒（5 分钟）
-    max_retries = 3,        // 失败后最多重试次数，默认 3 次
-    // retry_delay：两次重试之间等待的秒数
-    // 优先从环境变量 NETWORK_RETRY_DELAY 读取（方便运维调整，不改代码）
-    // ?? "5" 表示环境变量未设置时用字符串 "5"
-    // parseFloat 将字符串转为数字（环境变量都是字符串类型）
+    temperature = 0.7,      // Generation randomness; 0 is most deterministic, 1 is more random.
+    max_tokens = 50000,     // Maximum output tokens.
+    timeout = 300,          // Request timeout in seconds; default 300 seconds, or 5 minutes.
+    max_retries = 3,        // Maximum retry attempts after a failure.
+    // retry_delay: seconds to wait between retries.
+    // Prefer NETWORK_RETRY_DELAY so operations can tune it without changing code.
+    // ?? "5" means use string "5" when the environment variable is unset.
+    // parseFloat converts the environment string into a number.
     retry_delay = parseFloat(process.env["NETWORK_RETRY_DELAY"] ?? "5"),
-    extra_headers,          // 额外的 HTTP 请求头（可选，无默认值，不传则为 undefined）
-    extra_params,           // 额外的 API 参数（可选，无默认值，不传则为 undefined）
+    extra_headers,          // Optional extra HTTP headers; undefined when not provided.
+    extra_params,           // Optional extra API parameters; undefined when not provided.
   } = options;
 
-  // 第一步：预处理消息——将本地图片路径转换为 Base64 Data URL
+  // Step 1: preprocess messages, converting local image paths to Base64 Data URLs.
   const processedMessages = processMessagesWithImages(messages);
 
-  // 第二步：带重试的请求循环
-  // attempt 从 0 开始计数，最多尝试 max_retries 次
+  // Step 2: request loop with retries.
+  // attempt starts at 0 and can run at most max_retries times.
   for (let attempt = 0; attempt < max_retries; attempt++) {
     try {
-      // ⭐ 密钥熔断机制：如果安全检查未通过，直接返回错误，不发起网络请求
-      // 返回 "fatal" 状态，表示不可重试的致命错误，上层会停止调用
+      // Safety gate: if the check fails, return before making any network request.
+      // Return "fatal" because retrying will not help until the setting changes.
       if (!isLlmEnabled()) {
-        logger.warning("🔒 [SAFETY] LLM 调用已冻结，跳过 API 请求");
-        return ["fatal_error", { error: "LLM 调用已冻结（LLM_API_ENABLE 未启用）" }];
+        logger.warning("[SAFETY] LLM calls are disabled; skipping API request");
+        return ["fatal_error", { error: "LLM calls are disabled (LLM_API_ENABLE is not enabled)" }];
       }
 
-      // 第三步：构建 OpenAI Chat Completions 格式的请求体
-      // 参考：https://platform.openai.com/docs/api-reference/chat/create
+      // Step 3: build an OpenAI Chat Completions-compatible request body.
+      // Reference: https://platform.openai.com/docs/api-reference/chat/create
       const payload: Record<string, unknown> = {
-        model,                        // 模型名称
-        messages: processedMessages,  // 处理后的消息列表
-        temperature,                  // 生成随机性
-        max_tokens,                   // 最大生成长度
+        model,                        // Model name.
+        messages: processedMessages,  // Processed message list.
+        temperature,                  // Generation randomness.
+        max_tokens,                   // Maximum generated length.
       };
 
-      // 合并额外参数（如思考模式开关、top_p 等 API 特有参数）
-      // Object.assign 会将 extra_params 的所有属性复制到 payload 上
+      // Merge extra parameters, such as provider-specific thinking switches or top_p.
+      // Object.assign copies all extra_params properties onto payload.
       if (extra_params) {
         Object.assign(payload, extra_params);
       }
 
-      // 构建 HTTP 请求头
-      // Authorization: Bearer <key> 是 OpenAI 兼容 API 的标准认证方式
+      // Build HTTP request headers.
+      // Authorization: Bearer <key> is the standard authentication scheme for OpenAI-compatible APIs.
       const headers: Record<string, string> = {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       };
 
-      // 合并额外请求头（如 OpenRouter 要求的 HTTP-Referer、X-Title 等）
+      // Merge extra headers, such as HTTP-Referer and X-Title required by OpenRouter.
       if (extra_headers) {
         Object.assign(headers, extra_headers);
       }
 
-      // 第四步：发送 HTTP 请求
-      // 使用 AbortController 实现请求超时控制
-      // AbortController 是 Web API 标准，Node.js 18+ 原生支持
+      // Step 4: send the HTTP request.
+      // AbortController provides request timeout control and is built into Node.js 18+.
       const controller = new AbortController();
-      // setTimeout 在 timeout 秒后触发 abort()，取消请求
-      // timeout 单位是秒，setTimeout 需要毫秒，所以乘以 1000
+      // setTimeout calls abort() after timeout seconds. setTimeout uses milliseconds.
       const timeoutId = setTimeout(() => controller.abort(), timeout * 1000);
 
       let response: Response;
       try {
-        // fetch 是 Node.js 18+ 内置的 HTTP 客户端（之前需要 node-fetch 包）
-        // signal: controller.signal 将 fetch 与 AbortController 关联
-        // 当 controller.abort() 被调用时，fetch 会抛出 AbortError
+        // fetch is the built-in HTTP client in Node.js 18+.
+        // signal connects fetch to AbortController, so abort() makes fetch throw AbortError.
         response = await fetch(apiUrl, {
           method: "POST",
           headers,
@@ -292,40 +290,40 @@ export async function callLlmApi(
           signal: controller.signal,
         });
       } finally {
-        // 无论请求成功还是失败，都要清除定时器，避免内存泄漏
+        // Always clear the timer to avoid leaks, whether the request succeeds or fails.
         clearTimeout(timeoutId);
       }
 
       // ============================================================
-      // 第五步：处理 HTTP 响应
+      // Step 5: handle the HTTP response
       // ============================================================
 
       if (response.status === 200) {
-        // ---- 成功响应，解析 JSON ----
+        // ---- Successful response: parse JSON ----
         const responseData = await response.json() as Record<string, unknown>;
 
-        // 提取 AI 生成的文本内容
-        // OpenAI 响应格式：{ choices: [{ message: { content: "..." }, finish_reason: "stop" }] }
+        // Extract generated text.
+        // OpenAI response format: { choices: [{ message: { content: "..." }, finish_reason: "stop" }] }
         const choices = responseData["choices"] as Array<Record<string, unknown>> | undefined;
-        // choices?.[0] 是可选链：如果 choices 为 undefined 则返回 undefined，不会报错
+        // choices?.[0] is optional chaining; undefined choices will not throw.
         const choice = choices?.[0] ?? {};
         const message = choice["message"] as Record<string, unknown> | undefined;
-        // 提取文本内容，若为空则默认为空字符串
+        // Extract text content, defaulting to an empty string.
         let content = (message?.["content"] as string | undefined) ?? "";
-        // 去除首尾空白字符（API 有时会返回带换行的内容）
+        // Trim leading and trailing whitespace; APIs sometimes include newlines.
         if (content) content = content.trim();
-        // finish_reason 表示生成停止的原因：
-        //   "stop":   正常完成
-        //   "length": 达到 max_tokens 限制被截断
+        // finish_reason explains why generation stopped:
+        //   "stop":   normal completion.
+        //   "length": truncated by the max_tokens limit.
         const finishReason = choice["finish_reason"] as string | undefined;
 
-        // ⭐ 处理 token 用量（usage 字段可能缺失）
-        // 标准 OpenAI API 会返回 usage，但某些第三方 API 可能不返回
+        // Handle token usage; some providers may omit the usage field.
+        // Standard OpenAI API responses include usage, but some third-party APIs do not.
         const usageRaw = responseData["usage"] as Record<string, number> | undefined;
 
         let usageDict: UsageDict;
         if (usageRaw) {
-          // API 提供了 usage，直接使用（准确值）
+          // The API provided usage, so use it directly.
           usageDict = {
             prompt_tokens: usageRaw["prompt_tokens"] ?? 0,
             completion_tokens: usageRaw["completion_tokens"] ?? 0,
@@ -333,17 +331,17 @@ export async function callLlmApi(
             token_source: "api",
           };
         } else {
-          // ⭐ API 未提供 usage，使用本地估算
-          // 这种情况常见于 Ollama 等本地部署的模型、部分第三方代理
-          logger.warning("API响应缺少usage字段，使用token估算值计算成本");
+          // The API did not provide usage, so estimate it locally.
+          // This is common with local deployments such as Ollama and some third-party proxies.
+          logger.warning("API response is missing usage; estimating tokens for cost calculation");
 
-          // 将所有输入消息的文本内容拼接起来估算 prompt token
-          // 注意：多模态消息的图片部分无法估算，这里只统计文本
+          // Join all plain-text input messages to estimate prompt tokens.
+          // Note: image content in multimodal messages cannot be estimated here.
           const promptText = processedMessages
             .map((msg) => (typeof msg.content === "string" ? msg.content : ""))
             .join(" ");
           const estimatedPrompt = estimateTokensFromText(promptText);
-          // 用 AI 回复的文本估算 completion token
+          // Estimate completion tokens from the generated text.
           const estimatedCompletion = estimateTokensFromText(content);
 
           usageDict = {
@@ -354,95 +352,94 @@ export async function callLlmApi(
           };
 
           logger.info(
-            `Token估算: prompt≈${estimatedPrompt}, ` +
+            `Token estimate: prompt≈${estimatedPrompt}, ` +
               `completion≈${estimatedCompletion}, ` +
               `total≈${usageDict.total_tokens}`
           );
         }
 
-        // 组装最终结果
+        // Build the final result.
         const resultDict: LlmResult = { content, usage: usageDict };
 
-        // 根据 finish_reason 判断调用是否成功
+        // Determine call status from finish_reason.
         if (finishReason === "stop") {
-          // 正常完成，返回成功
+          // Normal completion.
           return ["success", resultDict];
         } else if (finishReason === "length") {
-          // 被截断：达到了 max_tokens 限制
+          // Truncated by the max_tokens limit.
           logger.warning(
-            `响应被截断，已消耗${usageDict.total_tokens}tokens ` +
-              `(来源: ${usageDict.token_source})`
+            `Response was truncated after ${usageDict.total_tokens} tokens ` +
+              `(source: ${usageDict.token_source})`
           );
-          // 如果截断前已经有内容，仍视为成功（部分内容总比没有好）
+          // If there is content, treat it as success.
           if (content) return ["success", resultDict];
-          // 截断且无内容 → 致命错误，需要增大 max_tokens
+          // Truncated with no content means max_tokens needs to be increased.
           return [
             "fatal_error",
-            { error: "响应被截断且无内容，请增加max_tokens", usage: usageDict },
+            { error: "Response was truncated and empty; increase max_tokens", usage: usageDict },
           ];
         } else {
-          // 其他异常的 finish_reason（如 "content_filter" 等）
+          // Other finish reasons, such as "content_filter".
           if (content) {
-            // 有内容就视为成功，只记录警告
-            logger.warning(`异常的完成原因: ${finishReason}，但已获取到内容`);
+            // Treat as success if content was returned, but keep a warning.
+            logger.warning(`Unexpected finish reason: ${finishReason}, but content was received`);
             return ["success", resultDict];
           }
-          return ["fatal_error", { error: `异常的完成原因: ${finishReason}` }];
+          return ["fatal_error", { error: `Unexpected finish reason: ${finishReason}` }];
         }
       }
 
       // ============================================================
-      // HTTP 错误处理（非 200 状态码）
+      // HTTP error handling for non-200 status codes
       // ============================================================
 
-      // 读取错误响应体（文本格式），用于错误消息
+      // Read the error response body as text for the error message.
       const responseText = await response.text();
 
-      // 按 HTTP 状态码分类处理
+      // Classify by HTTP status code.
       if (response.status === 400) {
-        // 400 Bad Request：请求参数错误（如不支持的模型名、无效的 temperature 值）
-        // 致命错误，修正参数前重试无意义
-        return ["fatal_error", { error: `客户端错误 (400): ${responseText}` }];
+        // 400 Bad Request: invalid parameters such as unsupported model or temperature.
+        // Fatal until the caller fixes the request.
+        return ["fatal_error", { error: `Client error (400): ${responseText}` }];
       } else if (response.status === 401 || response.status === 403) {
-        // 401 Unauthorized / 403 Forbidden：API 密钥无效或无权限
-        // 致命错误，更换密钥前重试无意义
-        return ["fatal_error", { error: `认证错误 (${response.status}): ${responseText}` }];
+        // 401 Unauthorized / 403 Forbidden: invalid API key or missing permission.
+        // Fatal until credentials are fixed.
+        return ["fatal_error", { error: `Authentication error (${response.status}): ${responseText}` }];
       } else if (response.status === 404) {
-        // 404 Not Found：API 端点或模型名不存在
-        // 致命错误，检查 URL 和模型名
-        return ["fatal_error", { error: `资源未找到 (404): ${responseText}` }];
+        // 404 Not Found: API endpoint or model name does not exist.
+        // Fatal until URL or model is fixed.
+        return ["fatal_error", { error: `Resource not found (404): ${responseText}` }];
       } else if (response.status === 429) {
-        // 429 Too Many Requests：触发速率限制（每分钟请求数/token 数超限）
-        // 可重试：等待后重试，间隔线性递增（retry_delay × 第几次重试）
-        if (attempt < max_retries - 1) {
-          await sleep(retry_delay * (attempt + 1));
-          continue; // 跳到下一次重试
-        }
-        // 重试次数用尽，返回可重试错误（交给上层决定是否继续重试）
-        return ["retriable_error", { error: `速率限制 (429): ${responseText}` }];
-      } else if (response.status >= 500 && response.status < 600) {
-        // 5xx 服务器错误：API 服务端出问题，通常是暂时性的
-        // 可重试：等待后重试，间隔线性递增
+        // 429 Too Many Requests: rate limit exceeded.
+        // Retry after a linearly increasing delay.
         if (attempt < max_retries - 1) {
           await sleep(retry_delay * (attempt + 1));
           continue;
         }
-        return ["retriable_error", { error: `服务器错误 (${response.status}): ${responseText}` }];
+        // Retry attempts are exhausted; let the caller decide whether to retry later.
+        return ["retriable_error", { error: `Rate limit (429): ${responseText}` }];
+      } else if (response.status >= 500 && response.status < 600) {
+        // 5xx server errors are usually temporary, so retry with linear delay.
+        if (attempt < max_retries - 1) {
+          await sleep(retry_delay * (attempt + 1));
+          continue;
+        }
+        return ["retriable_error", { error: `Server error (${response.status}): ${responseText}` }];
       } else if (response.status === 408) {
-        // 408 Request Timeout：服务端超时（区别于客户端 AbortError 超时）
-        // 可重试：等待固定间隔后重试
+        // 408 Request Timeout: server-side timeout, separate from client AbortError timeout.
+        // Retry after a fixed delay.
         if (attempt < max_retries - 1) {
           await sleep(retry_delay);
           continue;
         }
-        return ["retriable_error", { error: `请求超时 (408): ${responseText}` }];
+        return ["retriable_error", { error: `Request timeout (408): ${responseText}` }];
       } else {
-        // 其他未预期的 HTTP 状态码（如 418 I'm a teapot），视为致命错误
-        return ["fatal_error", { error: `未知HTTP错误 (${response.status}): ${responseText}` }];
+        // Other unexpected HTTP status codes, such as 418, are treated as fatal.
+        return ["fatal_error", { error: `Unknown HTTP error (${response.status}): ${responseText}` }];
       }
     } catch (e) {
       // ============================================================
-      // 网络层错误处理（请求未能到达服务器或未收到完整响应）
+      // Network-level error handling
       // ============================================================
 
       if (e instanceof Error) {
@@ -450,51 +447,51 @@ export async function callLlmApi(
         const msg = e.message;
 
         if (name === "AbortError") {
-          // AbortError：客户端超时——AbortController 在 timeout 秒后触发了 abort()
-          // 可重试：服务器可能暂时响应慢
+          // AbortError: client-side timeout triggered by AbortController.
+          // Retry because the server may be temporarily slow.
           if (attempt < max_retries - 1) {
             await sleep(retry_delay);
             continue;
           }
-          return ["retriable_error", { error: "请求超时" }];
+          return ["retriable_error", { error: "Request timed out" }];
         }
 
         if (msg.includes("SSL") || msg.includes("certificate")) {
-          // SSL/TLS 证书错误：证书过期、自签名证书、证书链不完整等
-          // 可重试：有时是暂时性的网络问题导致证书验证失败
-          logger.warning(`SSL证书错误（尝试 ${attempt + 1}/${max_retries}）: ${msg}`);
+          // SSL/TLS certificate errors: expired, self-signed, incomplete chain, and similar cases.
+          // Retry because certificate validation can fail due to temporary network issues.
+          logger.warning(`SSL certificate error (attempt ${attempt + 1}/${max_retries}): ${msg}`);
           if (attempt < max_retries - 1) {
-            logger.info(`等待 ${retry_delay} 秒后重试...`);
+            logger.info(`Waiting ${retry_delay} seconds before retry...`);
             await sleep(retry_delay);
             continue;
           }
           return [
             "retriable_error",
             {
-              error: `SSL证书验证失败（重试${max_retries}次后仍失败）: ${msg}`,
+              error: `SSL certificate validation failed after ${max_retries} attempts: ${msg}`,
               error_type: "ssl_error",
             },
           ];
         }
 
         if (msg.includes("proxy") || msg.includes("PROXY")) {
-          // 代理连接错误：HTTP/HTTPS 代理不可达或拒绝连接
-          // 可重试：代理服务器可能暂时不可用
-          logger.warning(`代理连接错误: ${msg}`);
+          // Proxy connection error: HTTP/HTTPS proxy is unreachable or refused the connection.
+          // Retry because the proxy may be temporarily unavailable.
+          logger.warning(`Proxy connection error: ${msg}`);
           if (attempt < max_retries - 1) {
             await sleep(retry_delay);
             continue;
           }
-          return ["retriable_error", { error: `代理连接失败: ${msg}`, error_type: "proxy_error" }];
+          return ["retriable_error", { error: `Proxy connection failed: ${msg}`, error_type: "proxy_error" }];
         }
 
         if (msg.includes("redirect") || msg.includes("REDIRECT")) {
-          // 重定向过多：通常是 API URL 配置错误导致的无限重定向循环
-          // 致命错误：重试不会改善，需要修正 URL 配置
-          logger.error(`重定向次数过多: ${msg}`);
+          // Too many redirects usually means the API URL is misconfigured.
+          // Fatal because retrying will not fix the URL.
+          logger.error(`Too many redirects: ${msg}`);
           return [
             "fatal_error",
-            { error: `重定向次数超限: ${msg}`, error_type: "redirect_error" },
+            { error: `Redirect limit exceeded: ${msg}`, error_type: "redirect_error" },
           ];
         }
 
@@ -504,66 +501,66 @@ export async function callLlmApi(
           msg.includes("incomplete") ||
           msg.includes("truncated")
         ) {
-          // 分块传输错误：HTTP chunked transfer encoding 数据不完整
-          // 对应 Python 版 requests.exceptions.ChunkedEncodingError
-          // 常见原因：服务器在传输响应体时中断连接（网络抖动、服务端超时等）
-          // 可重试：通常是暂时性的网络问题
-          logger.warning(`分块传输错误（尝试 ${attempt + 1}/${max_retries}）: ${msg}`);
+          // Chunked transfer error: HTTP chunked transfer encoding data was incomplete.
+          // Equivalent to requests.exceptions.ChunkedEncodingError in Python.
+          // Common causes include network instability or a server-side timeout.
+          // Retry because this is usually temporary.
+          logger.warning(`Chunked transfer error (attempt ${attempt + 1}/${max_retries}): ${msg}`);
           if (attempt < max_retries - 1) {
             await sleep(retry_delay);
             continue;
           }
           return [
             "retriable_error",
-            { error: `数据传输中断: ${msg}`, error_type: "chunked_encoding_error" },
+            { error: `Transfer interrupted: ${msg}`, error_type: "chunked_encoding_error" },
           ];
         }
 
-        // 通用网络错误（DNS 解析失败、连接拒绝、网络不可达等）
-        // 可重试：网络问题通常是暂时性的
+        // Generic network errors: DNS failure, connection refused, unreachable network, and similar cases.
+        // Retry because network problems are often temporary.
         if (attempt < max_retries - 1) {
           await sleep(retry_delay);
           continue;
         }
-        return ["retriable_error", { error: `请求异常: ${msg}` }];
+        return ["retriable_error", { error: `Request exception: ${msg}` }];
       }
 
-      // e 不是 Error 实例（极少见，如 throw "string" 或 throw 42）
-      // 致命错误：无法判断类型，不适合重试
-      return ["fatal_error", { error: `未知错误: ${e}` }];
+      // e is not an Error instance, which is rare, such as throw "string" or throw 42.
+      // Treat as fatal because the type cannot be classified.
+      return ["fatal_error", { error: `Unknown error: ${e}` }];
     }
   }
 
-  // 所有重试都用尽后仍未成功（理论上不应到达这里，但作为安全兜底）
-  return ["retriable_error", { error: `重试${max_retries}次后仍然失败` }];
+  // All retries were exhausted. This should be unreachable, but keep it as a safety fallback.
+  return ["retriable_error", { error: `Still failed after ${max_retries} attempts` }];
 }
 
 // ============================================================
-// 简化接口
+// Simplified interface
 // ============================================================
 
 /**
- * 简化的对话接口
+ * Simplified chat interface.
  *
- * 适用于只需发送单条文本消息的简单场景。
- * 内部将 prompt 包装为 [{ role: "user", content: prompt }] 后调用 callLlmApi()。
+ * Useful for simple cases that send a single text message.
+ * Internally wraps prompt as [{ role: "user", content: prompt }] before calling callLlmApi().
  *
- * 与 callLlmApi 的区别：
- *   - callLlmApi 返回 [status, result] 元组，调用方自行判断状态
- *   - chat 直接返回 LlmResult，遇到错误时抛出异常
+ * Difference from callLlmApi:
+ *   - callLlmApi returns a [status, result] tuple and leaves status handling to the caller.
+ *   - chat returns LlmResult directly and throws on errors.
  *
- * 使用示例：
- *   const result = await chat("你好", apiUrl, apiKey, "gpt-4o");
- *   console.log(result.content);  // "你好！有什么可以帮助你的吗？"
+ * Example:
+ *   const result = await chat("Hello", apiUrl, apiKey, "gpt-4o");
+ *   console.log(result.content);  // "Hello! How can I help?"
  *   console.log(result.usage);    // { prompt_tokens: 5, completion_tokens: 12, ... }
  *
- * @param prompt  用户输入的文本
- * @param apiUrl  API 端点 URL
- * @param apiKey  API 密钥
- * @param model   模型名称
- * @param options 可选参数
- * @returns LlmResult 包含生成文本和 token 用量
- * @throws Error 可重试错误或致命错误时抛出异常
+ * @param prompt User input text.
+ * @param apiUrl API endpoint URL.
+ * @param apiKey API key.
+ * @param model Model name.
+ * @param options Optional parameters.
+ * @returns LlmResult with generated text and token usage.
+ * @throws Error for retriable or fatal errors.
  */
 export async function chat(
   prompt: string,
@@ -572,49 +569,49 @@ export async function chat(
   model: string,
   options: LlmCallOptions = {}
 ): Promise<LlmResult> {
-  // 将单条 prompt 包装为标准的消息列表格式
+  // Wrap a single prompt as a standard message list.
   const messages: Message[] = [{ role: "user", content: prompt }];
 
   const [status, result] = await callLlmApi(messages, apiUrl, apiKey, model, options);
 
   if (status === "success") {
-    // 成功时 result 一定是 LlmResult 类型，使用 as 断言告诉 TypeScript
+    // On success, result is LlmResult; the assertion tells TypeScript that.
     return result as LlmResult;
   } else if (status === "retriable_error") {
-    // 可重试错误：抛出异常，调用方可 catch 后决定是否重试
-    // result 可能是 { error: "..." } 对象，需要安全地提取错误消息
+    // Retriable error: throw so the caller can catch it and decide whether to retry.
+    // result may be { error: "..." }, so extract the message safely.
     const errorMsg =
       typeof result === "object" && result !== null && "error" in result
         ? result["error"]
         : String(result);
-    throw new Error(`API调用失败（可重试）: ${errorMsg}`);
+    throw new Error(`API call failed (retriable): ${errorMsg}`);
   } else {
-    // 致命错误：同样抛出异常，但调用方不应重试
+    // Fatal error: also throw, but the caller should not retry unchanged.
     const errorMsg =
       typeof result === "object" && result !== null && "error" in result
         ? result["error"]
         : String(result);
-    throw new Error(`API调用失败（致命错误）: ${errorMsg}`);
+    throw new Error(`API call failed (fatal): ${errorMsg}`);
   }
 }
 
 // ============================================================
-// 工具函数
+// Utility functions
 // ============================================================
 
 /**
- * 异步等待指定秒数
+ * Wait asynchronously for the given number of seconds.
  *
- * 封装 setTimeout 为 Promise，使其可以配合 async/await 使用。
- * 用于重试间隔等待。
+ * Wraps setTimeout as a Promise so it can be used with async/await.
+ * Used for retry delays.
  *
- * 示例：await sleep(5)  // 等待 5 秒
+ * Example: await sleep(5)  // Wait 5 seconds.
  *
- * @param seconds 等待的秒数
- * @returns Promise，在指定秒数后 resolve
+ * @param seconds Seconds to wait.
+ * @returns Promise that resolves after the given number of seconds.
  */
 function sleep(seconds: number): Promise<void> {
-  // setTimeout 的单位是毫秒，所以 seconds × 1000
-  // new Promise + resolve 将回调式的 setTimeout 转为 Promise 风格
+  // setTimeout uses milliseconds, so multiply seconds by 1000.
+  // new Promise + resolve converts callback-style setTimeout into Promise style.
   return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }

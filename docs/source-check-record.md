@@ -15,6 +15,7 @@ Date started: 2026-04-23
 | --- | --- | --- | --- |
 | `workflows/chat/run.ts` | Checked | 2026-04-23 | Bug and Chinese text were found in the previous focused check. Source changes are outside this tracker. |
 | `src/model_caller.ts` | Checked | 2026-04-23 | No direct source-code bug or Chinese text was found in the previous focused check. |
+| `src/llm_client.ts` | Needs follow-up | 2026-04-27 | Multimodal usage-estimation bug is intentionally deferred; tracked Chinese text translated to English. |
 | `src/exceptions.ts` | Checked | 2026-04-27 | Cost currency wording fixed; tracked Chinese text translated to English. |
 | `src/cost_calculator.ts` | Checked | 2026-04-27 | Final total-cost rounding bug fixed; no Chinese text found. |
 | `src/workflow_loader.ts` | Checked | 2026-04-23 | Loader bugs fixed; tracked Chinese text translated to English. |
@@ -47,6 +48,11 @@ Record bugs here immediately after checking each file.
 ### `src/model_caller.ts`
 
 - No bugs found in the previous focused check.
+
+### `src/llm_client.ts`
+
+- `callLlmApi()` underestimates prompt tokens when an API response does not include `usage` and the request uses multimodal message content. Its fallback estimation only reads messages whose `content` is a plain string, so text blocks inside `MessageContent[]` are ignored. This can underreport prompt tokens and cost for providers that omit `usage`.
+- Deferred on 2026-04-27 by user request; this bug remains recorded for later work.
 
 ### `src/utils.ts`
 
@@ -137,6 +143,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 
 - No Chinese text found in the previous focused check.
 
+### `src/llm_client.ts`
+
+- Translated on 2026-04-27: module documentation, section headings, interface comments, inline comments, log messages, thrown error messages, and usage examples in `src/llm_client.ts`; focused comments, test names, assertions, and sample strings in `tests/llm_client.test.ts`.
+
 ### `src/utils.ts`
 
 - Translated on 2026-04-27: tracked module comments, section headings, function documentation, inline comments, log messages, thrown error messages, and focused utility test comments/names were translated to English.
@@ -222,6 +232,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/model_caller.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/model_caller.ts`.
 - Follow-up needed: none recorded.
+
+### 2026-04-27 - `src/llm_client.ts`
+
+- Checked request construction, safety gating, retry handling, response parsing, usage fallback estimation, the `chat()` wrapper, focused tests, and the image-message preprocessing handoff.
+- Bug details: see `Bugs Found` > `src/llm_client.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/llm_client.ts`.
+- Follow-up needed: fix the deferred multimodal usage-estimation fallback later; tracked Chinese text translation is done.
 
 ### 2026-04-27 - `src/exceptions.ts`
 
@@ -429,3 +446,8 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `npm.cmd run typecheck` passed after fixing the tracked `src/cost_calculator.ts` total-cost rounding bug.
 - `npm.cmd test -- cost_calculator` passed with 30 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
 - `rg -n "[\p{Han}]" src/cost_calculator.ts tests/cost_calculator.test.ts` returned no matches after the tracked `src/cost_calculator.ts` fix.
+- `rg -n "[\p{Han}]" src/llm_client.ts` found Chinese module documentation, comments, log messages, thrown error messages, and examples during the focused check.
+- A focused code read of `src/llm_client.ts`, `src/utils.ts`, and `tests/llm_client.test.ts` confirmed the multimodal usage-estimation bug: text blocks inside array-based message content are ignored when API usage data is missing, and current tests cover plain string estimation but not multimodal text-block estimation.
+- `rg -n "[\p{Han}]" src/llm_client.ts tests/llm_client.test.ts` returned no matches after the tracked English cleanup.
+- `npm.cmd run typecheck` passed after translating the tracked `src/llm_client.ts` and `tests/llm_client.test.ts` text to English.
+- `npm.cmd test -- llm_client` passed with 37 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
