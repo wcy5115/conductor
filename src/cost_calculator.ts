@@ -65,7 +65,17 @@ export interface PricingInfo {
  * fractional costs from disappearing over many calls.
  */
 function ceilTo4(value: number): number {
-  return Math.ceil(value * 10000) / 10000;
+  const scaled = value * 10000;
+  const nearestInteger = Math.round(scaled);
+  const tolerance = Number.EPSILON * Math.max(1, Math.abs(scaled)) * 10;
+
+  // Treat near-integers as exact so binary floating-point dust does not round
+  // values like 0.30000000000000004 up to 0.3001.
+  if (Math.abs(scaled - nearestInteger) <= tolerance) {
+    return nearestInteger / 10000;
+  }
+
+  return Math.ceil(scaled) / 10000;
 }
 
 // ============================================================
@@ -105,7 +115,7 @@ export function calculateCost(
 
   const inputCost = ceilTo4((promptTokens / 1_000_000) * pricing.input);
   const outputCost = ceilTo4((completionTokens / 1_000_000) * pricing.output);
-  const totalCost = inputCost + outputCost;
+  const totalCost = ceilTo4(inputCost + outputCost);
 
   logger.debug(
     `Cost [${model}]: input ${promptTokens} tokens=${formatCost(inputCost)}, ` +
@@ -170,7 +180,7 @@ export function aggregateCosts(costList: CostResult[]): CostResult {
 
   totalInputCost = ceilTo4(totalInputCost);
   totalOutputCost = ceilTo4(totalOutputCost);
-  const totalCost = totalInputCost + totalOutputCost;
+  const totalCost = ceilTo4(totalInputCost + totalOutputCost);
 
   logger.info(
     `Cost summary (${costList.length} calls): ` +

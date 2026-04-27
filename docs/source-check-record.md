@@ -16,6 +16,7 @@ Date started: 2026-04-23
 | `workflows/chat/run.ts` | Checked | 2026-04-23 | Bug and Chinese text were found in the previous focused check. Source changes are outside this tracker. |
 | `src/model_caller.ts` | Checked | 2026-04-23 | No direct source-code bug or Chinese text was found in the previous focused check. |
 | `src/exceptions.ts` | Checked | 2026-04-27 | Cost currency wording fixed; tracked Chinese text translated to English. |
+| `src/cost_calculator.ts` | Checked | 2026-04-27 | Final total-cost rounding bug fixed; no Chinese text found. |
 | `src/workflow_loader.ts` | Checked | 2026-04-23 | Loader bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_parser.ts` | Checked | 2026-04-23 | Parser validation bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_engine.ts` | Checked | 2026-04-23 | Start-node and action-name logging bugs fixed; tracked Chinese text translated to English. |
@@ -58,6 +59,10 @@ Record bugs here immediately after checking each file.
 ### `src/exceptions.ts`
 
 - Fixed on 2026-04-27: `CostInfo.total_cost` no longer describes the value as USD. The exception comments now match the current project cost system, which uses CNY and displays values with `¥`.
+
+### `src/cost_calculator.ts`
+
+- Fixed on 2026-04-27: `calculateCost()` and `aggregateCosts()` now round final `total_cost` values without letting binary floating-point artifacts such as `0.30000000000000004` round the value one extra tick upward.
 
 ### `src/workflow_loader.ts`
 
@@ -144,6 +149,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 
 - Translated on 2026-04-27: tracked module comments, interface comments, field comments, usage example text, constructor comments, `toString()` comments, and `toString()` output labels were translated to English.
 
+### `src/cost_calculator.ts`
+
+- No Chinese text found during the focused check on 2026-04-27.
+
 ### `src/workflow_loader.ts`
 
 - Translated on 2026-04-23: tracked comments and user-facing strings in this file were translated to English.
@@ -220,6 +229,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/exceptions.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/exceptions.ts`.
 - Follow-up needed: none for the tracked `src/exceptions.ts` work.
+
+### 2026-04-27 - `src/cost_calculator.ts`
+
+- Checked model pricing lookup, per-call cost calculation, cost formatting, aggregate cost calculation, token estimation, deprecated compatibility functions, and existing cost tests.
+- Bug details: see `Bugs Found` > `src/cost_calculator.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/cost_calculator.ts`.
+- Follow-up needed: none for the tracked `src/cost_calculator.ts` work.
 
 ### 2026-04-23 - `src/workflow_loader.ts`
 
@@ -408,3 +424,8 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]" src/workflow_actions/utils.ts tests/workflow_actions_utils.test.ts` returned no matches after the tracked English cleanup.
 - `npm.cmd run typecheck` passed after fixing the tracked `src/workflow_actions/utils.ts` zero-cost metadata bug and English cleanup.
 - `npm.cmd test -- workflow_actions_utils` passed with 5 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]" src/cost_calculator.ts` returned no matches during the focused `src/cost_calculator.ts` check.
+- `node -e "console.log(0.1 + 0.2); console.log(0.0001 + 0.0002)"` confirmed JavaScript can expose floating-point artifacts (`0.30000000000000004`, `0.00030000000000000003`) that the current total-cost additions can leak into returned metadata.
+- `npm.cmd run typecheck` passed after fixing the tracked `src/cost_calculator.ts` total-cost rounding bug.
+- `npm.cmd test -- cost_calculator` passed with 30 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]" src/cost_calculator.ts tests/cost_calculator.test.ts` returned no matches after the tracked `src/cost_calculator.ts` fix.

@@ -114,6 +114,19 @@ describe("calculateCost", () => {
     expect(result.output_tokens).toBe(5_000_000);
   });
 
+  it("keeps total cost free of floating-point artifacts", () => {
+    vi.mocked(getModelPricingInfo).mockReturnValue({
+      input: 0.1,
+      output: 0.2,
+      currency: "CNY",
+    });
+
+    const result = calculateCost("priced-model", 1_000_000, 1_000_000, 2_000_000);
+    expect(result.input_cost).toBe(0.1);
+    expect(result.output_cost).toBe(0.2);
+    expect(result.total_cost).toBe(0.3);
+  });
+
   it("returns zero cost for zero tokens even when pricing is available", () => {
     vi.mocked(getModelPricingInfo).mockReturnValue({
       input: 1.0,
@@ -272,6 +285,24 @@ describe("aggregateCosts", () => {
     expect(result.output_cost).toBe(0.0001);
     expect(result.total_cost).toBe(0.0002);
     expect(result.count).toBe(2);
+  });
+
+  it("keeps aggregate total cost free of floating-point artifacts", () => {
+    const cost: CostResult = {
+      input_cost: 0.0001,
+      output_cost: 0.0002,
+      total_cost: 0.0003,
+      currency: "CNY",
+      input_tokens: 1,
+      output_tokens: 2,
+      total_tokens: 3,
+      pricing_available: true,
+    };
+    const result = aggregateCosts([cost]);
+
+    expect(result.input_cost).toBe(0.0001);
+    expect(result.output_cost).toBe(0.0002);
+    expect(result.total_cost).toBe(0.0003);
   });
 
   it("marks pricing_available false when no record has pricing", () => {
