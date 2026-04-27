@@ -21,6 +21,7 @@ Date started: 2026-04-23
 | `src/workflow_engine.ts` | Checked | 2026-04-23 | Start-node and action-name logging bugs fixed; tracked Chinese text translated to English. |
 | `src/index.ts` | Checked | 2026-04-27 | Package entry exports fixed; no Chinese text found. |
 | `src/core/workflow_runner.ts` | Checked | 2026-04-23 | Related start-node bug fixed; tracked Chinese text translated to English. |
+| `src/utils.ts` | Checked | 2026-04-27 | Image preprocessing now fails loudly for requested local images that cannot be included; tracked Chinese text translated to English. |
 | `src/workflow_actions/llm_actions.ts` | Checked | 2026-04-23 | Multimodal prompt interpolation bug fixed; tracked Chinese text translated to English. |
 | `src/workflow_actions/io_actions.ts` | Checked | 2026-04-24 | Merge action empty-input result-shape bug fixed; tracked Chinese text translated to English. |
 | `src/workflow_actions/data_actions.ts` | Checked | 2026-04-24 | Processor output validation bug fixed; tracked comments translated to English and cleaned up from corrupted encoding. |
@@ -44,6 +45,10 @@ Record bugs here immediately after checking each file.
 ### `src/model_caller.ts`
 
 - No bugs found in the previous focused check.
+
+### `src/utils.ts`
+
+- Fixed on 2026-04-27: `processMessagesWithImages()` now throws when a requested `{ type: "image", path: ... }` block points to a missing file or the image cannot be converted. This prevents `callLlmApi()` from continuing with an incomplete multimodal payload.
 
 ### `src/exceptions.ts`
 
@@ -121,6 +126,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/model_caller.ts`
 
 - No Chinese text found in the previous focused check.
+
+### `src/utils.ts`
+
+- Translated on 2026-04-27: tracked module comments, section headings, function documentation, inline comments, log messages, thrown error messages, and focused utility test comments/names were translated to English.
 
 ### `src/exceptions.ts`
 
@@ -230,6 +239,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/index.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/index.ts`.
 - Follow-up needed: none for the tracked package entry bug.
+
+### 2026-04-27 - `src/utils.ts`
+
+- Checked file saving, image Base64 conversion, MIME lookup, multimodal image preprocessing, JSON cleanup/parsing, and the internal JSON helper functions.
+- Bug details: see `Bugs Found` > `src/utils.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/utils.ts`.
+- Follow-up needed: none for the tracked `src/utils.ts` work.
 
 ### 2026-04-23 - `src/core/workflow_runner.ts`
 
@@ -366,3 +382,8 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `models.yaml` and `src/cost_calculator.ts` confirm the current cost system uses CNY/`¥`, while `src/exceptions.ts` documents `CostInfo.total_cost` as USD.
 - `rg -n "[\p{Han}]" src/exceptions.ts` returned no matches after translating the tracked `src/exceptions.ts` text to English.
 - `npm.cmd run typecheck` passed after fixing the `src/exceptions.ts` currency wording and tracked language.
+- `rg -n "[\p{Han}]" src/utils.ts` found Chinese comments, logs, and thrown error messages during the focused `src/utils.ts` check.
+- A focused code read of `src/utils.ts`, `src/llm_client.ts`, and existing utility tests confirmed the image preprocessing risk: `processMessagesWithImages()` skips missing or failed local image blocks, and existing tests do not cover this helper.
+- `rg -n "[\p{Han}]" src/utils.ts tests/utils.test.ts` returned no matches after the tracked English cleanup.
+- `npm.cmd run typecheck` passed after fixing the tracked `src/utils.ts` image preprocessing bug and English cleanup.
+- `npm.cmd test -- utils` passed with 17 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.

@@ -1,12 +1,12 @@
 /**
- * 统一工具模块
- * 提供文件操作、图片处理、JSON 清洗等基础工具函数
+ * Shared utility module.
+ * Provides basic helpers for file operations, image handling, and JSON cleanup.
  */
 
 import * as fs from "fs";
 import * as path from "path";
 
-// 暂用 console 作为日志占位，待 core/logging.ts 迁移后替换
+// Temporary console logger until this module is migrated to core/logging.ts.
 const logger = {
   info: (msg: string) => console.info(msg),
   error: (msg: string) => console.error(msg),
@@ -14,65 +14,65 @@ const logger = {
 };
 
 // ============================================================
-// 文件操作
+// File Operations
 // ============================================================
 
 /**
- * 保存内容到文件
+ * Save content to a file.
  *
- * @param filepath 文件路径
- * @param content 要保存的内容
+ * @param filepath File path.
+ * @param content Content to save.
  */
 export function saveToFile(filepath: string, content: string): void {
   try {
     fs.mkdirSync(path.dirname(filepath), { recursive: true });
     fs.writeFileSync(filepath, content, "utf-8");
-    logger.info(`内容已成功保存到: ${filepath}`);
-    console.log(`[OK] 内容已保存到: ${filepath}`);
+    logger.info(`Content saved successfully to: ${filepath}`);
+    console.log(`[OK] Content saved to: ${filepath}`);
   } catch (e) {
-    logger.error(`保存文件失败: ${filepath}, 错误: ${e}`);
+    logger.error(`Failed to save file: ${filepath}, error: ${e}`);
     throw e;
   }
 }
 
 // ============================================================
-// 图片处理工具函数
+// Image Helpers
 // ============================================================
 
 /**
- * 将图片文件转换为 Base64 编码字符串
+ * Convert an image file to a Base64-encoded string.
  *
- * @param imagePath 图片文件路径
- * @returns Base64 编码的字符串
- * @throws Error 图片文件不存在或编码失败
+ * @param imagePath Image file path.
+ * @returns Base64-encoded string.
+ * @throws Error when the image file is missing or cannot be encoded.
  */
 export function imageToBase64(imagePath: string): string {
   if (!fs.existsSync(imagePath)) {
-    throw new Error(`图片文件不存在: ${imagePath}`);
+    throw new Error(`Image file does not exist: ${imagePath}`);
   }
 
   try {
     const encoded = fs.readFileSync(imagePath).toString("base64");
 
     if (!encoded) {
-      throw new Error("Base64 编码结果为空");
+      throw new Error("Base64 encoded result is empty");
     }
 
     logger.debug(
-      `图片已转换为 Base64: ${path.basename(imagePath)} (${encoded.length} 字符)`,
+      `Image converted to Base64: ${path.basename(imagePath)} (${encoded.length} characters)`,
     );
     return encoded;
   } catch (e) {
-    logger.error(`图片 Base64 编码失败: ${imagePath}, 错误: ${e}`);
+    logger.error(`Image Base64 encoding failed: ${imagePath}, error: ${e}`);
     throw e;
   }
 }
 
 /**
- * 根据文件扩展名获取图片的 MIME 类型
+ * Get an image MIME type from its file extension.
  *
- * @param imagePath 图片文件路径
- * @returns MIME 类型字符串（如 "image/jpeg"）
+ * @param imagePath Image file path.
+ * @returns MIME type string, for example "image/jpeg".
  */
 export function getImageMimeType(imagePath: string): string {
   const suffix = path.extname(imagePath).toLowerCase();
@@ -90,20 +90,19 @@ export function getImageMimeType(imagePath: string): string {
 }
 
 // ============================================================
-// 多模态消息预处理
+// Multimodal Message Preprocessing
 // ============================================================
 
 /**
- * 消息内容块的类型定义（从 llm_client.ts 导入时使用）
+ * Message content block type used with llm_client.ts.
  *
- * 多模态消息（如同时包含文本和图片）的 content 字段是一个数组，
- * 数组中每个元素就是一个 MessageContent。
+ * In multimodal messages, content is an array where each item is a
+ * MessageContent block.
  *
- * 示例 —— 文本块：  { type: "text", text: "请描述这张图片" }
- * 示例 —— 图片块：  { type: "image_url", image_url: { url: "data:image/png;base64,..." } }
+ * Text block example:  { type: "text", text: "Describe this image" }
+ * Image block example: { type: "image_url", image_url: { url: "data:image/png;base64,..." } }
  *
- * [key: string]: unknown 表示允许携带任意额外字段（等价于 Python 的 dict[str, Any]）
- * 这样设计是因为不同 API 提供商可能有自定义字段
+ * The index signature allows provider-specific extra fields.
  */
 interface MessageContent {
   type: string;
@@ -111,16 +110,16 @@ interface MessageContent {
 }
 
 /**
- * 单条聊天消息的类型定义（从 llm_client.ts 导入时使用）
+ * Single chat message type used with llm_client.ts.
  *
- * role 表示发言角色，常见值：
- *   - "system":    系统提示词
- *   - "user":      用户输入
- *   - "assistant": AI 的回复
+ * role is the speaker role. Common values are:
+ *   - "system":    system instructions
+ *   - "user":      user input
+ *   - "assistant": assistant response
  *
- * content 有两种形态：
- *   - string: 纯文本消息
- *   - MessageContent[]: 多模态消息，包含文本 + 图片等多种内容块
+ * content has two forms:
+ *   - string: plain text message
+ *   - MessageContent[]: multimodal message with text, images, or other blocks
  */
 interface MessageForImageProcessing {
   role: string;
@@ -128,60 +127,52 @@ interface MessageForImageProcessing {
 }
 
 /**
- * 预处理消息列表，自动将本地图片路径转换为 Base64 编码
+ * Preprocess messages by converting local image paths to Base64 Data URLs.
  *
- * 工作流 YAML 中用户可以这样引用本地图片：
+ * Workflow YAML can reference local images like this:
  *   { type: "image", path: "./screenshots/page1.jpg" }
  *
- * 但 OpenAI 兼容 API 要求图片以 Base64 Data URL 传递，格式为：
+ * OpenAI-compatible APIs expect images to be sent as Base64 Data URLs:
  *   { type: "image_url", image_url: { url: "data:image/jpeg;base64,/9j/4AAQ..." } }
  *
- * 本函数遍历所有消息，找到 type="image" 的内容块，读取文件并转换格式。
- * 纯文本消息（content 是 string）不做任何处理，原样保留。
+ * This function scans all messages, finds content blocks with type="image",
+ * reads those local files, and converts them into API-compatible image blocks.
+ * Plain text messages are returned unchanged.
  *
- * @param messages 原始消息列表
- * @returns 处理后的消息列表（新数组，不修改原始数据）
+ * @param messages Original messages.
+ * @returns Processed messages as a new array without mutating the input.
  */
-export function processMessagesWithImages(messages: MessageForImageProcessing[]): MessageForImageProcessing[] {
-  // 创建新数组存放处理后的消息，避免修改原始输入（不可变数据原则）
+export function processMessagesWithImages(
+  messages: MessageForImageProcessing[],
+): MessageForImageProcessing[] {
+  // Keep the input immutable by writing processed messages into a new array.
   const processedMessages: MessageForImageProcessing[] = [];
 
   for (const msg of messages) {
-    // 浅拷贝消息对象，后续可能替换 content 字段
-    // { ...msg } 是展开运算符，创建一个新对象，复制 msg 的所有属性
+    // Shallow-copy the message because content may be replaced below.
     const processedMsg = { ...msg };
 
-    // 只有 content 为数组时才需要处理（数组 = 多模态消息，可能包含图片）
-    // 纯文本消息（string）不可能包含图片路径，直接跳过
+    // Only array content can contain local image blocks.
     if (Array.isArray(msg.content)) {
       const processedContent: MessageContent[] = [];
 
       for (const item of msg.content) {
-        // 防御性检查：确保元素是对象且非 null
+        // Defensive check: content blocks should be objects, but preserve
+        // unexpected values so callers can handle provider-specific shapes.
         if (typeof item === "object" && item !== null) {
-          // 检测图片路径标记：type 为 "image" 且携带 path 字段
-          // 这是本项目自定义的格式，不是 OpenAI API 标准
+          // Project-specific local image marker, not the API wire format.
           if (item.type === "image" && "path" in item) {
             const imagePath = item.path as string;
 
-            // 第一步：检查图片文件是否存在
             if (!fs.existsSync(imagePath)) {
-              logger.error(`图片文件不存在，跳过: ${imagePath}`);
-              // continue 跳过当前图片，不中断其他内容的处理
-              continue;
+              throw new Error(`Image file does not exist: ${imagePath}`);
             }
 
-            // 第二步：读取文件并转换为 Base64 Data URL
             try {
-              // imageToBase64() 读取二进制文件内容，返回 Base64 编码字符串
               const base64Data = imageToBase64(imagePath);
-              // getImageMimeType() 根据扩展名返回 MIME 类型
-              // 例如：.jpg → "image/jpeg"，.png → "image/png"
               const mimeType = getImageMimeType(imagePath);
 
-              // 构建 OpenAI 兼容的图片内容块
-              // Data URL 格式：data:<MIME类型>;base64,<编码数据>
-              // detail: "high" 表示使用高分辨率模式解析图片（消耗更多 token 但更清晰）
+              // Build the OpenAI-compatible image block.
               const processedItem: MessageContent = {
                 type: "image_url",
                 image_url: {
@@ -190,23 +181,22 @@ export function processMessagesWithImages(messages: MessageForImageProcessing[])
                 },
               };
               processedContent.push(processedItem);
-              logger.debug(`图片已转换: ${imagePath}`);
+              logger.debug(`Image converted: ${imagePath}`);
             } catch (e) {
-              logger.error(`图片转换失败: ${imagePath}, 错误: ${e}`);
-              // 转换失败时跳过该图片，不影响其余内容
-              continue;
+              const message = e instanceof Error ? e.message : String(e);
+              throw new Error(`Failed to convert image: ${imagePath}, error: ${message}`);
             }
           } else {
-            // 非图片类型的内容块（如文本块），原样保留
+            // Preserve non-image content blocks, such as text blocks.
             processedContent.push(item as MessageContent);
           }
         } else {
-          // 非对象类型的元素（理论上不应出现），原样保留以保证健壮性
+          // Preserve unexpected non-object values for compatibility.
           processedContent.push(item as MessageContent);
         }
       }
 
-      // 用处理后的内容块数组替换原始 content
+      // Replace the original content array with the processed content blocks.
       processedMsg.content = processedContent;
     }
 
@@ -217,41 +207,41 @@ export function processMessagesWithImages(messages: MessageForImageProcessing[])
 }
 
 // ============================================================
-// JSON 验证工具函数
+// JSON Validation Helpers
 // ============================================================
 
 /**
- * 验证并清理 JSON 内容（只做基础处理）
+ * Validate and clean JSON content with basic preprocessing only.
  *
- * 功能：
- * - 移除 Markdown 代码块标记
- * - 提取 JSON 部分
- * - 转义控制字符（换行符、制表符等）
- * - 修复非法转义（如 LaTeX 符号）
- * - 解析 JSON
+ * Behavior:
+ * - Remove Markdown code fences.
+ * - Extract the JSON portion.
+ * - Escape control characters, such as real newlines and tabs.
+ * - Fix invalid escape sequences, such as LaTeX commands.
+ * - Parse JSON.
  *
- * 注意：此函数只负责基础的 JSON 格式验证和清理，
- * 业务逻辑验证（字段、类型、结构）请使用 validators 模块。
+ * Note: this function only handles basic JSON format cleanup. Use the
+ * validators module for business validation such as fields, types, and shape.
  *
- * @param text LLM 返回的原始文本
- * @returns 解析后的 JSON 数据（object 或 array）
- * @throws Error JSON 格式无效
+ * @param text Raw text returned by an LLM.
+ * @returns Parsed JSON data as an object or array.
+ * @throws Error when the JSON format is invalid.
  */
 export function validateAndCleanJson(
   text: string,
 ): Record<string, unknown> | unknown[] {
-  // 1. 类型检查
+  // 1. Type check.
   if (typeof text !== "string") {
-    throw new Error(`输入必须是字符串，实际类型: ${typeof text}`);
+    throw new Error(`Input must be a string, actual type: ${typeof text}`);
   }
 
-  // 2. 清理文本
+  // 2. Trim input text.
   text = text.trim();
   if (!text) {
-    throw new Error("输入文本为空");
+    throw new Error("Input text is empty");
   }
 
-  // 3. 移除 Markdown 代码块
+  // 3. Remove Markdown code fences.
   if (text.includes("```")) {
     const mdMatch = /```(?:json)?\s*\n(.*?)\n```/is.exec(text);
     if (mdMatch) {
@@ -261,40 +251,40 @@ export function validateAndCleanJson(
     }
   }
 
-  // 4. 提取 JSON 部分（查找第一个 { 到最后一个 } 或 [ 到 ]）
+  // 4. Extract the JSON portion.
   const jsonMatch = /[{[].*[}\]]/s.exec(text);
   if (jsonMatch) {
     text = jsonMatch[0];
   }
 
-  // 5. 预处理：转义控制字符
+  // 5. Escape control characters.
   text = escapeControlChars(text);
 
-  // 6. 预处理：修复非法转义
+  // 6. Fix invalid escape sequences.
   text = fixInvalidEscapes(text);
 
-  // 7. 解析 JSON
+  // 7. Parse JSON.
   try {
     const data = JSON.parse(text) as Record<string, unknown> | unknown[];
     logger.debug(
-      `✓ JSON 格式验证通过，类型: ${Array.isArray(data) ? "array" : "object"}`,
+      `JSON format validation passed, type: ${Array.isArray(data) ? "array" : "object"}`,
     );
     return data;
   } catch (e) {
-    const errorMsg = `无法解析JSON: ${e}\n原始内容前200字符: ${text.slice(0, 200)}...`;
+    const errorMsg = `Unable to parse JSON: ${e}\nFirst 200 characters of raw content: ${text.slice(0, 200)}...`;
     logger.error(errorMsg);
     throw new Error(errorMsg);
   }
 }
 
 // ============================================================
-// JSON 预处理辅助函数（内部使用，不导出）
+// JSON Preprocessing Helpers
 // ============================================================
 
 /**
- * 转义 JSON 字符串中的控制字符（真实的换行符、制表符等）
+ * Escape control characters inside JSON strings.
  *
- * 只在双引号内的字符串中进行转义，不破坏 JSON 结构
+ * Escapes only inside double-quoted strings so the JSON structure is preserved.
  */
 function escapeControlChars(jsonText: string): string {
   const result: string[] = [];
@@ -334,9 +324,10 @@ function escapeControlChars(jsonText: string): string {
 }
 
 /**
- * 修复非法转义序列（如 \alpha）
+ * Fix invalid escape sequences, such as \alpha.
  *
- * 策略：把单独的反斜杠转义成双反斜杠，保留原文内容
+ * Strategy: escape single backslashes as double backslashes while preserving
+ * the original text.
  */
 function fixInvalidEscapes(jsonText: string): string {
   return jsonText.replace(/(?<!\\)\\(?!["\\/bfnrtu])/g, "\\\\");
