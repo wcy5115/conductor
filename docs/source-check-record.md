@@ -18,6 +18,7 @@ Date started: 2026-04-23
 | `src/workflow_loader.ts` | Checked | 2026-04-23 | Loader bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_parser.ts` | Checked | 2026-04-23 | Parser validation bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_engine.ts` | Checked | 2026-04-23 | Start-node and action-name logging bugs fixed; tracked Chinese text translated to English. |
+| `src/index.ts` | Checked | 2026-04-27 | Package entry exports fixed; no Chinese text found. |
 | `src/core/workflow_runner.ts` | Checked | 2026-04-23 | Related start-node bug fixed; tracked Chinese text translated to English. |
 | `src/workflow_actions/llm_actions.ts` | Checked | 2026-04-23 | Multimodal prompt interpolation bug fixed; tracked Chinese text translated to English. |
 | `src/workflow_actions/io_actions.ts` | Checked | 2026-04-24 | Merge action empty-input result-shape bug fixed; tracked Chinese text translated to English. |
@@ -58,6 +59,10 @@ Record bugs here immediately after checking each file.
 
 - Fixed on 2026-04-23: `runWorkflow()` defaulted to `startStep: "1"` even when the parsed `WorkflowGraph` had a different `startNode`. It now uses `workflowGraph.startNode` when no explicit `startStep` is provided.
 - Fixed on 2026-04-23: step names used for structured logging could be wrong when actions were registered as bound functions. Registered actions now carry an explicit display name, so logs use names such as `Log_A` instead of `bound run`.
+
+### `src/index.ts`
+
+- Fixed on 2026-04-27: `package.json` declares `dist/index.js` and `dist/index.d.ts` as the package entry points, but `src/index.ts` only ran `console.log("conductor")` and exported no public API. The entry file now re-exports the main runner, engine, loader, parser, model, action, validator, and utility APIs without the console side effect.
 
 ### `src/core/workflow_runner.ts`
 
@@ -123,6 +128,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/workflow_engine.ts`
 
 - Translated on 2026-04-23: tracked comments and user-facing logs/errors in this file were translated to English.
+
+### `src/index.ts`
+
+- No Chinese text found during the focused check on 2026-04-27.
 
 ### `src/core/workflow_runner.ts`
 
@@ -198,6 +207,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/workflow_engine.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/workflow_engine.ts`.
 - Follow-up needed: none for the checked engine bugs.
+
+### 2026-04-27 - `src/index.ts`
+
+- Checked the package entry source file and compared it with the package metadata entry points.
+- Bug details: see `Bugs Found` > `src/index.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/index.ts`.
+- Follow-up needed: none for the tracked package entry bug.
 
 ### 2026-04-23 - `src/core/workflow_runner.ts`
 
@@ -325,3 +341,8 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]"` returned no matches in `src/workflow_actions/base.ts` and `tests/base_action.test.ts` after the tracked English cleanup.
 - `npm.cmd run typecheck` passed after fixing the `src/workflow_actions/base.ts` error-history key-shape bug.
 - `npm.cmd test -- base_action` passed with 2 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]" src/index.ts` returned no matches during the focused `src/index.ts` check.
+- `package.json` declares `dist/index.js` and `dist/index.d.ts` as package entry points, confirming that `src/index.ts` is the source for the published entry file.
+- `npm.cmd run typecheck` passed after fixing `src/index.ts`.
+- `npm.cmd run build` passed after fixing `src/index.ts`, confirming the package entry and declarations compile.
+- `node -e "import('./dist/index.js')..."` succeeded after fixing `src/index.ts` and confirmed the built package entry exposes exported API names. It also printed the existing model-config load message from `src/model_caller.ts`, which is outside this focused entry-file fix.
