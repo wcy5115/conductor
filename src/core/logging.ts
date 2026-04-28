@@ -1,48 +1,54 @@
 /**
- * 结构化日志系统（Structured Logger）
+ * Structured logging system.
  *
- * 本模块提供了一个基于事件的结构化日志记录器，用于记录工作流执行过程中的各类事件。
- * 与传统的"拼接字符串然后 console.log"不同，这里每条日志都是一个结构化的事件对象，
- * 方便后续做日志分析、成本统计、性能监控等。
+ * This module provides an event-based structured logger for recording workflow
+ * execution events. Instead of building ad hoc strings and passing them to
+ * console.log, each log entry is a structured event object. That makes later
+ * log analysis, cost statistics, and performance monitoring much easier.
  *
- * 双输出架构：
- *   1. 机器可读日志（workflow.jsonl）—— 每行一个 JSON 对象，方便程序解析和分析
- *      示例行：{"timestamp":"2024-01-01T12:00:00.000Z","level":"INFO","event_type":"step_start",...}
- *   2. 人类可读日志（workflow.log）—— 传统的文本格式，方便开发者直接查看
- *      示例行：[2024-01-01 12:00:00] INFO: [STEP] 步骤 step1 开始: PDF转图片
- *   3. 控制台输出 —— 与人类可读日志类似，实时显示在终端
+ * Output architecture:
+ *   1. Machine-readable log (workflow.jsonl) - one JSON object per line, easy
+ *      for programs to parse and analyze.
+ *      Example line: {"timestamp":"2024-01-01T12:00:00.000Z","level":"INFO","event_type":"step_start",...}
+ *   2. Human-readable log (workflow.log) - traditional text format for direct
+ *      developer inspection.
+ *      Example line: [2024-01-01 12:00:00] INFO: [STEP] Step step1 started: PDF to images
+ *   3. Console output - similar to the human-readable log, shown live in the
+ *      terminal.
  *
- * JSONL 格式说明：
- *   JSONL（JSON Lines）是一种文本格式，每行是一个独立的 JSON 对象。
- *   相比普通 JSON 文件（整个文件是一个数组），JSONL 的优势：
- *     - 可以逐行追加写入（append），无需读取整个文件
- *     - 可以逐行解析，处理大文件时不占用大量内存
- *     - 文件损坏时只影响损坏的行，其余行仍可解析
+ * JSONL format notes:
+ *   JSONL (JSON Lines) is a text format where each line is an independent JSON
+ *   object. Compared with a regular JSON file where the whole file is one
+ *   array, JSONL has a few useful properties:
+ *     - It can be appended line by line without reading the whole file.
+ *     - It can be parsed line by line without loading a large file into memory.
+ *     - If the file is partially damaged, only damaged lines are affected.
  */
 
-// fs 是 Node.js 内置的文件系统模块
-// 这里用到：fs.mkdirSync（创建目录）、fs.createWriteStream（创建写入流）
+// fs is Node.js's built-in file system module.
+// Used here for fs.mkdirSync and fs.createWriteStream.
 import * as fs from "fs";
-// path 是 Node.js 内置的路径处理模块
-// 这里用到：path.join（路径拼接）、path.basename（提取文件名）
+// path is Node.js's built-in path handling module.
+// Used here for path.join and path.basename.
 import * as path from "path";
 
 // ========================================
-// 枚举定义
+// Enum Definitions
 // ========================================
 
 /**
- * 日志级别枚举
+ * Log level enum.
  *
- * 从低到高排列，级别越高表示事件越重要/严重。
- * 日志系统会根据配置的阈值级别过滤输出——
- * 例如设置 consoleLevel = WARNING，则 DEBUG 和 INFO 级别的日志不会在控制台显示。
+ * Ordered from low to high. Higher levels indicate more important or severe
+ * events. The logger filters output according to the configured threshold.
+ * For example, if consoleLevel is WARNING, DEBUG and INFO messages will not be
+ * shown in the console.
  *
- * DEBUG:    调试信息，仅在排查问题时需要（如文件读写操作的详细信息）
- * INFO:     一般运行信息（如步骤开始/结束、工作流启动）
- * WARNING:  警告，不影响运行但需要注意（如 API 响应缺少 usage 字段）
- * ERROR:    错误，某个操作失败但程序仍可继续（如单个步骤执行失败）
- * CRITICAL: 致命错误，程序无法继续运行（如配置文件缺失、认证失败）
+ * DEBUG:    Detailed debugging information, such as file I/O details.
+ * INFO:     Normal runtime information, such as step start/end events.
+ * WARNING:  Something worth attention that does not stop execution.
+ * ERROR:    An operation failed, but the program may still continue.
+ * CRITICAL: A fatal error that prevents the program from continuing.
  */
 export enum LogLevel {
   DEBUG = "DEBUG",
@@ -53,20 +59,20 @@ export enum LogLevel {
 }
 
 /**
- * 事件类型枚举
+ * Event type enum.
  *
- * 每条日志都属于一个事件类型，用于分类和过滤。
- * 这些类型覆盖了工作流执行的完整生命周期：
+ * Each log entry belongs to an event type for classification and filtering.
+ * These types cover the full workflow execution lifecycle:
  *
- * WORKFLOW_START:  工作流开始执行
- * WORKFLOW_END:    工作流执行结束（成功或失败）
- * STEP_START:      单个步骤开始执行
- * STEP_END:        单个步骤执行结束
- * LLM_CALL:        一次 LLM API 调用（记录模型、token 用量、花费）
- * FILE_OPERATION:  文件操作（读取、写入、删除等）
- * ERROR:           错误事件
- * METRIC:          性能指标（如耗时、吞吐量）
- * CUSTOM:          自定义事件（不属于以上类型的通用日志）
+ * WORKFLOW_START:  Workflow execution started.
+ * WORKFLOW_END:    Workflow execution ended, successfully or unsuccessfully.
+ * STEP_START:      A single step started.
+ * STEP_END:        A single step ended.
+ * LLM_CALL:        One LLM API call, including model, token usage, and cost.
+ * FILE_OPERATION:  File operations such as read, write, or delete.
+ * ERROR:           Error event.
+ * METRIC:          Performance metric, such as duration or throughput.
+ * CUSTOM:          General custom event that does not fit another type.
  */
 export enum EventType {
   WORKFLOW_START = "workflow_start",
@@ -81,28 +87,29 @@ export enum EventType {
 }
 
 // ========================================
-// 类型定义
+// Type Definitions
 // ========================================
 
 /**
- * 日志事件的数据结构
+ * Data structure for a log event.
  *
- * 每条日志本质上是一个 LogEvent 对象，序列化为 JSON 后写入 JSONL 文件。
+ * Each log entry is a LogEvent object serialized to JSON and written to the
+ * JSONL file.
  *
- * timestamp:  ISO 8601 格式的时间戳，如 "2024-01-01T12:00:00.000Z"
- * level:      日志级别（"DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL"）
- * event_type: 事件类型（见 EventType 枚举）
- * data:       事件携带的数据（不同事件类型有不同的 data 内容）
- *             类型 Record<string, unknown> 等价于 Python 的 dict[str, Any]
- * [key: string]: unknown — 允许合并上下文字段（通过 setContext 设置的全局字段）
+ * timestamp:  ISO 8601 timestamp, such as "2024-01-01T12:00:00.000Z".
+ * level:      Log level ("DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL").
+ * event_type: Event type. See the EventType enum.
+ * data:       Event payload. Different event types use different data shapes.
+ *             Record<string, unknown> is similar to Python's dict[str, Any].
+ * [key: string]: unknown allows global context fields from setContext().
  *
- * 示例（一条 STEP_END 事件）：
+ * Example STEP_END event:
  *   {
  *     timestamp: "2024-01-01T12:00:05.000Z",
  *     level: "INFO",
  *     event_type: "step_end",
  *     data: { step_id: "step1", duration: 5.23, cost: { total_cost: 0.0012 } },
- *     workflow_name: "ocr_pipeline"    ← 这是通过 setContext 注入的上下文字段
+ *     workflow_name: "ocr_pipeline"    // Context field injected by setContext.
  *   }
  */
 export interface LogEvent {
@@ -114,14 +121,14 @@ export interface LogEvent {
 }
 
 /**
- * StructuredLogger 构造函数的选项
+ * Options for the StructuredLogger constructor.
  *
- * logDir:          日志文件存放目录，默认 "logs"
- * consoleLevel:    控制台输出的最低级别，默认 INFO（不显示 DEBUG）
- * fileLevel:       文件输出的最低级别，默认 DEBUG（全部记录）
- * enableConsole:   是否启用控制台输出，默认 true
- * enableSystemLog: 是否启用机器可读日志（workflow.jsonl），默认 true
- * enableHumanLog:  是否启用人类可读日志（workflow.log），默认 true
+ * logDir:          Directory for log files. Defaults to "logs".
+ * consoleLevel:    Minimum console output level. Defaults to INFO.
+ * fileLevel:       Minimum file output level. Defaults to DEBUG.
+ * enableConsole:   Whether to enable console output. Defaults to true.
+ * enableSystemLog: Whether to enable workflow.jsonl. Defaults to true.
+ * enableHumanLog:  Whether to enable workflow.log. Defaults to true.
  */
 export interface StructuredLoggerOptions {
   logDir?: string;
@@ -133,15 +140,16 @@ export interface StructuredLoggerOptions {
 }
 
 // ========================================
-// 日志级别优先级（用于过滤）
+// Log Level Priority (For Filtering)
 // ========================================
 
 /**
- * 日志级别的数值优先级映射
+ * Numeric priority map for log levels.
  *
- * 数值越大表示级别越高。用于 shouldLog() 函数判断某条日志是否应该输出。
- * 例如：consoleLevel 设为 WARNING(30)，则只有 WARNING(30)、ERROR(40)、CRITICAL(50)
- *       级别的日志会在控制台显示，DEBUG(10) 和 INFO(20) 会被过滤掉。
+ * Higher numbers mean higher severity. shouldLog() uses this map to decide
+ * whether a message should be emitted. For example, if consoleLevel is
+ * WARNING(30), only WARNING(30), ERROR(40), and CRITICAL(50) messages are
+ * shown in the console; DEBUG(10) and INFO(20) are filtered out.
  */
 const LEVEL_PRIORITY: Record<string, number> = {
   DEBUG: 10,
@@ -152,108 +160,108 @@ const LEVEL_PRIORITY: Record<string, number> = {
 };
 
 /**
- * 判断某条日志是否应该输出
+ * Decide whether a log message should be emitted.
  *
- * @param messageLevel 这条日志的级别（如 "INFO"）
- * @param threshold    输出阈值（如 LogLevel.WARNING）
- * @returns true 表示应该输出，false 表示应该过滤掉
+ * @param messageLevel Level of this log message, such as "INFO".
+ * @param threshold    Output threshold, such as LogLevel.WARNING.
+ * @returns true if the message should be emitted, false if it should be filtered.
  *
- * 示例：
- *   shouldLog("DEBUG", LogLevel.INFO)     → false（10 < 20，被过滤）
- *   shouldLog("WARNING", LogLevel.INFO)   → true （30 ≥ 20，输出）
- *   shouldLog("ERROR", LogLevel.WARNING)  → true （40 ≥ 30，输出）
+ * Examples:
+ *   shouldLog("DEBUG", LogLevel.INFO)     -> false (10 < 20, filtered)
+ *   shouldLog("WARNING", LogLevel.INFO)   -> true  (30 >= 20, emitted)
+ *   shouldLog("ERROR", LogLevel.WARNING)  -> true  (40 >= 30, emitted)
  */
 function shouldLog(messageLevel: string, threshold: LogLevel): boolean {
-  // ?? 0 是防御性编码：如果传入了未知的级别字符串，默认优先级为 0（最低）
+  // ?? 0 is defensive: unknown level strings default to the lowest priority.
   return (LEVEL_PRIORITY[messageLevel] ?? 0) >= (LEVEL_PRIORITY[threshold] ?? 0);
 }
 
 // ========================================
-// StructuredLogger 类
+// StructuredLogger Class
 // ========================================
 
 /**
- * 结构化日志记录器
+ * Structured logger.
  *
- * 这是日志系统的核心类，提供三层 API：
+ * This is the core logger class. It provides three API layers:
  *
- * 第一层 —— 底层核心方法：
- *   logEvent()  接收原始事件数据，分发到三个输出目标
+ * Layer 1 - low-level core method:
+ *   logEvent() receives raw event data and dispatches it to the output targets.
  *
- * 第二层 —— 通用便捷方法（按级别）：
- *   debug() / info() / warning() / error()  自动设置对应级别
+ * Layer 2 - general convenience methods by level:
+ *   debug() / info() / warning() / error() set the corresponding level.
  *
- * 第三层 —— 领域事件方法（按业务含义）：
- *   workflowStart() / workflowEnd()  —— 工作流生命周期
- *   stepStart() / stepEnd()          —— 步骤生命周期
- *   llmCall()                        —— LLM 调用记录
- *   fileOperation()                  —— 文件操作记录
+ * Layer 3 - domain event methods:
+ *   workflowStart() / workflowEnd() record workflow lifecycle events.
+ *   stepStart() / stepEnd() record step lifecycle events.
+ *   llmCall() records LLM calls.
+ *   fileOperation() records file operations.
  *
- * 使用示例：
- *   // 创建日志器，日志文件存放在 data/project/logs/ 目录
+ * Usage example:
+ *   // Create a logger with log files under data/project/logs/.
  *   const logger = new StructuredLogger({ logDir: "data/project/logs" });
  *
- *   // 记录工作流开始
+ *   // Record workflow start.
  *   logger.workflowStart("ocr_pipeline", { input: "document.pdf" });
  *
- *   // 记录步骤开始和结束
- *   logger.stepStart("step1", "PDF转图片", { pdf: "document.pdf" });
+ *   // Record step start and end.
+ *   logger.stepStart("step1", "PDF to images", { pdf: "document.pdf" });
  *   logger.stepEnd("step1", { images: 20 }, { total_cost: 0 }, 5.23);
  *
- *   // 记录 LLM 调用
+ *   // Record an LLM call.
  *   logger.llmCall("gpt-4o", 1500, 500, 0.0125, "step2");
  *
- *   // 完成后关闭（释放文件流）
+ *   // Close the logger when finished to release file streams.
  *   logger.close();
  */
 export class StructuredLogger {
-  // ---- 配置字段 ----
+  // ---- Configuration fields ----
 
-  /** 日志文件存放目录的路径 */
+  /** Directory path for log files. */
   private logDir: string;
-  /** 控制台输出的最低日志级别（低于此级别的不在控制台显示） */
+  /** Minimum log level shown in the console. */
   private consoleLevel: LogLevel;
-  /** 文件输出的最低日志级别（低于此级别的不写入 workflow.log） */
+  /** Minimum log level written to workflow.log. */
   private fileLevel: LogLevel;
-  /** 是否启用控制台输出 */
+  /** Whether console output is enabled. */
   private enableConsole: boolean;
-  /** 是否启用机器可读日志文件（workflow.jsonl） */
+  /** Whether the machine-readable workflow.jsonl log is enabled. */
   private enableSystemLog: boolean;
-  /** 是否启用人类可读日志文件（workflow.log） */
+  /** Whether the human-readable workflow.log file is enabled. */
   private enableHumanLog: boolean;
 
-  // ---- 文件写入流 ----
+  // ---- File write streams ----
 
   /**
-   * 系统日志的写入流（workflow.jsonl）
+   * Write stream for the system log (workflow.jsonl).
    *
-   * fs.WriteStream 是 Node.js 的可写流，调用 .write() 将数据写入文件。
-   * 使用流（而非每次 fs.writeFileSync）的好处：
-   *   - 不需要每次写入都打开和关闭文件，性能更好
-   *   - 数据会先缓冲在内存中，批量写入磁盘，减少 I/O 次数
-   *   - 非阻塞，不会卡住主线程
+   * fs.WriteStream is a Node.js writable stream. Calling .write() appends data
+   * to the file. Streams are preferable to calling fs.writeFileSync each time:
+   *   - The file does not need to be opened and closed for every write.
+   *   - Data can be buffered in memory and flushed in batches.
+   *   - Writes are non-blocking and do not stall the main thread.
    */
   private systemLogStream: fs.WriteStream | null = null;
-  /** 人类可读日志的写入流（workflow.log） */
+  /** Write stream for the human-readable log (workflow.log). */
   private humanLogStream: fs.WriteStream | null = null;
 
-  // ---- 上下文 ----
+  // ---- Context ----
 
   /**
-   * 全局上下文字段，会自动合并到每条日志事件中
+   * Global context fields that are merged into every log event.
    *
-   * 例如设置 context = { workflow_name: "ocr_pipeline" }，
-   * 之后每条日志都会自动携带 workflow_name 字段，无需每次手动传入。
+   * For example, if context is { workflow_name: "ocr_pipeline" }, every later
+   * log entry automatically includes workflow_name without passing it each time.
    */
   private context: Record<string, unknown> = {};
 
   /**
-   * 构造函数
+   * Constructor.
    *
-   * @param options 配置选项（全部可选，有合理的默认值）
+   * @param options Configuration options. All are optional and have defaults.
    */
   constructor(options: StructuredLoggerOptions = {}) {
-    // 使用 ?? 空值合并运算符设置默认值（仅在值为 null/undefined 时使用默认值）
+    // Use nullish coalescing so defaults apply only for null/undefined values.
     this.logDir = options.logDir ?? "logs";
     this.consoleLevel = options.consoleLevel ?? LogLevel.INFO;
     this.fileLevel = options.fileLevel ?? LogLevel.DEBUG;
@@ -261,55 +269,58 @@ export class StructuredLogger {
     this.enableSystemLog = options.enableSystemLog ?? true;
     this.enableHumanLog = options.enableHumanLog ?? true;
 
-    // 确保日志目录存在（recursive: true 表示自动创建中间目录，类似 mkdir -p）
+    // Ensure the log directory exists. recursive: true behaves like mkdir -p.
     fs.mkdirSync(this.logDir, { recursive: true });
-    // 初始化文件写入流
+    // Initialize file write streams.
     this._setupStreams();
   }
 
   // ========================================
-  // 初始化
+  // Initialization
   // ========================================
 
   /**
-   * 初始化日志文件的写入流
+   * Initialize write streams for log files.
    *
-   * 根据配置决定是否创建 JSONL 和/或 TXT 日志文件的写入流。
-   * flags: "a" 表示以追加模式（append）打开文件——
-   *   新日志会添加到文件末尾，不会覆盖已有内容。
-   *   这样多次运行程序的日志会累积在同一个文件中。
+   * Creates JSONL and/or text log write streams according to the configuration.
+   * flags: "a" opens files in append mode, so new log entries are added to the
+   * end without overwriting existing content. Logs from multiple runs can
+   * therefore accumulate in the same file.
    */
   private _setupStreams(): void {
     if (this.enableSystemLog) {
-      // 机器可读日志：每行一个 JSON 对象
+      // Machine-readable log: one JSON object per line.
       const systemLogPath = path.join(this.logDir, "workflow.jsonl");
       this.systemLogStream = fs.createWriteStream(systemLogPath, { flags: "a", encoding: "utf-8" });
     }
 
     if (this.enableHumanLog) {
-      // 人类可读日志：传统的文本格式
+      // Human-readable log: traditional text format.
       const humanLogPath = path.join(this.logDir, "workflow.log");
       this.humanLogStream = fs.createWriteStream(humanLogPath, { flags: "a", encoding: "utf-8" });
     }
   }
 
   // ========================================
-  // 核心日志方法
+  // Core Logging Method
   // ========================================
 
   /**
-   * 记录一条日志事件（底层核心方法，所有便捷方法最终都调用这里）
+   * Record one log event.
    *
-   * 工作流程：
-   *   1. 构建 LogEvent 对象（添加时间戳、合并上下文）
-   *   2. 写入 JSONL 文件（机器可读，无级别过滤——全部记录）
-   *   3. 写入 TXT 文件（人类可读，受 fileLevel 过滤）
-   *   4. 控制台输出（受 consoleLevel 过滤，并根据级别选择 console 方法）
+   * This is the low-level core method used by all convenience methods.
    *
-   * @param eventType 事件类型（见 EventType 枚举）
-   * @param data      事件数据（不同事件类型携带不同的数据）
-   * @param level     日志级别，默认 "INFO"
-   * @param message   人类可读的消息文本（用于 TXT 文件和控制台；JSONL 不需要）
+   * Flow:
+   *   1. Build a LogEvent object with timestamp and context fields.
+   *   2. Write to the JSONL file. This path is machine-readable and unfiltered.
+   *   3. Write to the text file. This path is human-readable and fileLevel-filtered.
+   *   4. Write to the console. This path is consoleLevel-filtered and selects
+   *      a console method according to the log level.
+   *
+   * @param eventType Event type. See the EventType enum.
+   * @param data      Event payload. Different event types use different data.
+   * @param level     Log level. Defaults to "INFO".
+   * @param message   Human-readable message for text logs and console output.
    */
   logEvent(
     eventType: string,
@@ -317,9 +328,9 @@ export class StructuredLogger {
     level: string = "INFO",
     message?: string
   ): void {
-    // 构建事件对象
-    // ...this.context 将上下文字段展开合并到事件中
-    // 例如 context = { workflow_name: "ocr" }，则事件中会多出 workflow_name 字段
+    // Build the event object.
+    // ...this.context spreads global context fields into the event.
+    // For example, context = { workflow_name: "ocr" } adds workflow_name.
     const event: LogEvent = {
       timestamp: new Date().toISOString(),
       level,
@@ -328,28 +339,27 @@ export class StructuredLogger {
       ...this.context,
     };
 
-    // 1. 写入系统日志（JSONL）—— 不做级别过滤，所有事件都记录
-    //    JSON.stringify 将对象序列化为 JSON 字符串，加 \n 换行（JSONL 格式要求每行一条）
+    // 1. Write the system log (JSONL). This is unfiltered and records all events.
+    //    JSON.stringify serializes the event, and \n keeps one object per line.
     if (this.systemLogStream) {
       this.systemLogStream.write(JSON.stringify(event) + "\n");
     }
 
-    // 2. 写入人类可读日志（TXT）—— 受 fileLevel 过滤
+    // 2. Write the human-readable log (TXT). This is filtered by fileLevel.
     if (this.humanLogStream && message && shouldLog(level, this.fileLevel)) {
-      // 将 ISO 时间戳 "2024-01-01T12:00:00.000Z" 转为更易读的 "2024-01-01 12:00:00"
-      // .replace("T", " ") 将 T 替换为空格
-      // .slice(0, 19) 截取前 19 个字符（去掉毫秒和时区后缀 ".000Z"）
+      // Convert ISO timestamp "2024-01-01T12:00:00.000Z" to
+      // "2024-01-01 12:00:00" by replacing T and dropping milliseconds/timezone.
       const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
       this.humanLogStream.write(`[${ts}] ${level}: ${message}\n`);
     }
 
-    // 3. 控制台输出 —— 受 consoleLevel 过滤
+    // 3. Console output. This is filtered by consoleLevel.
     if (this.enableConsole && message && shouldLog(level, this.consoleLevel)) {
-      // 根据日志级别选择不同的 console 方法：
-      //   ERROR/CRITICAL → console.error（红色输出，输出到 stderr）
-      //   WARNING        → console.warn（黄色输出）
-      //   DEBUG          → console.debug（灰色输出，部分终端默认隐藏）
-      //   INFO 及其他    → console.log（标准输出）
+      // Pick a console method according to log level:
+      //   ERROR/CRITICAL -> console.error (stderr)
+      //   WARNING        -> console.warn
+      //   DEBUG          -> console.debug
+      //   INFO and other -> console.log
       const consoleFn = level === "ERROR" || level === "CRITICAL"
         ? console.error
         : level === "WARNING"
@@ -362,113 +372,117 @@ export class StructuredLogger {
   }
 
   // ========================================
-  // 便捷方法 - 通用日志（第二层 API）
+  // Convenience Methods - General Logs (Layer 2 API)
   // ========================================
 
   /**
-   * 记录调试级别日志
+   * Record a debug-level log.
    *
-   * 用于记录详细的调试信息，生产环境通常不在控制台显示（consoleLevel 默认是 INFO）。
-   * 但会写入 JSONL 文件，需要排查问题时可以查看。
+   * Use this for detailed debugging information. Production runs usually do not
+   * show these messages in the console because consoleLevel defaults to INFO.
+   * They are still written to JSONL for later troubleshooting.
    *
-   * @param message 日志消息
-   * @param data    附加数据（可选）
+   * @param message Log message.
+   * @param data    Optional additional data.
    */
   debug(message: string, data: Record<string, unknown> = {}): void {
     this.logEvent(EventType.CUSTOM, data, "DEBUG", message);
   }
 
   /**
-   * 记录信息级别日志
+   * Record an info-level log.
    *
-   * 用于记录正常的运行信息，如"步骤开始"、"文件已保存"等。
+   * Use this for normal runtime information, such as "step started" or
+   * "file saved".
    */
   info(message: string, data: Record<string, unknown> = {}): void {
     this.logEvent(EventType.CUSTOM, data, "INFO", message);
   }
 
   /**
-   * 记录警告级别日志
+   * Record a warning-level log.
    *
-   * 用于记录值得注意但不影响程序运行的情况，如"API 缺少 usage 字段"。
+   * Use this for notable situations that do not stop execution, such as an API
+   * response missing a usage field.
    */
   warning(message: string, data: Record<string, unknown> = {}): void {
     this.logEvent(EventType.CUSTOM, data, "WARNING", message);
   }
 
   /**
-   * 记录错误级别日志
+   * Record an error-level log.
    *
-   * 用于记录错误事件。可选传入 Error 对象，会自动提取 error_type 和 error_message。
+   * Use this for error events. Passing an Error object automatically extracts
+   * error_type and error_message.
    *
-   * @param message 错误描述
-   * @param error   Error 对象（可选），会自动提取类名和消息
-   * @param data    附加数据（可选）
+   * @param message Error description.
+   * @param error   Optional Error object. The class name and message are extracted.
+   * @param data    Optional additional data.
    *
-   * 示例：
+   * Example:
    *   try { ... } catch (e) {
-   *     logger.error("文件读取失败", e as Error, { path: "/tmp/data.json" });
+   *     logger.error("Failed to read file", e as Error, { path: "/tmp/data.json" });
    *   }
-   *   // data 中会包含：error_type: "Error", error_message: "ENOENT: no such file..."
+   *   // data will contain error_type: "Error" and error_message: "ENOENT: no such file..."
    */
   error(message: string, error?: Error, data: Record<string, unknown> = {}): void {
-    // 展开 data 的浅拷贝，避免修改调用方传入的对象
+    // Shallow-copy data so the caller's object is not modified.
     const errorData = { ...data };
     if (error) {
-      // error.constructor.name 获取错误类名（如 "TypeError"、"RangeError"）
+      // error.constructor.name gets the error class name, such as TypeError.
       errorData["error_type"] = error.constructor.name;
-      // error.message 获取错误消息文本
+      // error.message gets the error message text.
       errorData["error_message"] = error.message;
     }
     this.logEvent(EventType.ERROR, errorData, "ERROR", message);
   }
 
   // ========================================
-  // 便捷方法 - 工作流事件（第三层 API）
+  // Convenience Methods - Workflow Events (Layer 3 API)
   // ========================================
 
   /**
-   * 记录工作流开始事件
+   * Record a workflow start event.
    *
-   * 在工作流引擎（workflow_engine.ts）开始执行时调用。
-   * 会将 workflowName 存入上下文，后续所有日志自动携带 workflow_name 字段。
+   * Called when the workflow engine starts execution. Stores workflowName in
+   * context so later logs automatically include workflow_name.
    *
-   * @param workflowName 工作流名称（如 "ocr_pipeline"）
-   * @param config       工作流配置信息
+   * @param workflowName Workflow name, such as "ocr_pipeline".
+   * @param config       Workflow configuration information.
    */
   workflowStart(workflowName: string, config: Record<string, unknown>): void {
-    // 将工作流名称存入上下文——之后的每条日志都会自动包含 workflow_name 字段
+    // Store the workflow name so later logs automatically include workflow_name.
     this.context["workflow_name"] = workflowName;
-    const message = `[START] 工作流开始: ${workflowName}`;
+    const message = `[START] Workflow started: ${workflowName}`;
     this.logEvent(EventType.WORKFLOW_START, { workflow_name: workflowName, config }, "INFO", message);
   }
 
   /**
-   * 记录工作流结束事件
+   * Record a workflow end event.
    *
-   * @param status 完成状态，默认 "completed"，也可能是 "failed"
-   * @param stats  统计信息（可选），如 { duration: 120.5, total_cost: 0.85 }
+   * @param status Completion status. Defaults to "completed"; may also be "failed".
+   * @param stats  Optional statistics, such as { duration: 120.5, total_cost: 0.85 }.
    */
   workflowEnd(status: string = "completed", stats?: Record<string, unknown>): void {
-    let message = `[DONE] 工作流完成: ${status}`;
-    // 如果统计信息中有 duration 字段，追加耗时显示
+    let message = `[DONE] Workflow completed: ${status}`;
+    // Append duration display when stats contains a duration field.
     const duration = stats?.["duration"] as number | undefined;
     if (duration !== undefined) {
-      // toFixed(2) 保留两位小数
-      message += ` (耗时 ${duration.toFixed(2)}秒)`;
+      // Keep two decimal places.
+      message += ` (duration ${duration.toFixed(2)}s)`;
     }
     this.logEvent(EventType.WORKFLOW_END, { status, stats: stats ?? {} }, "INFO", message);
   }
 
   /**
-   * 记录步骤开始事件
+   * Record a step start event.
    *
-   * @param stepId   步骤 ID（如 "step1"、"pdf_to_images"）
-   * @param stepName 步骤显示名称（如 "PDF转图片"）
-   * @param inputs   步骤输入数据（可选，用于调试）
+   * @param stepId   Step ID, such as "step1" or "pdf_to_images".
+   * @param stepName Display name for the step, such as "PDF to images".
+   * @param inputs   Optional step inputs for debugging.
    */
   stepStart(stepId: string, stepName: string, inputs?: Record<string, unknown>): void {
-    const message = `[STEP] 步骤 ${stepId} 开始: ${stepName}`;
+    const message = `[STEP] Step ${stepId} started: ${stepName}`;
     this.logEvent(
       EventType.STEP_START,
       { step_id: stepId, step_name: stepName, inputs: inputs ?? {} },
@@ -478,15 +492,15 @@ export class StructuredLogger {
   }
 
   /**
-   * 记录步骤结束事件
+   * Record a step end event.
    *
-   * @param stepId   步骤 ID
-   * @param outputs  步骤输出数据（可选）
-   * @param cost     成本信息（可选），如 { total_cost: 0.0012, currency: "CNY" }
-   * @param duration 步骤耗时（秒，可选）
+   * @param stepId   Step ID.
+   * @param outputs  Optional step outputs.
+   * @param cost     Optional cost information, such as { total_cost: 0.0012, currency: "CNY" }.
+   * @param duration Optional step duration in seconds.
    *
-   * 控制台输出示例：
-   *   INFO: [OK] 步骤 step1 完成 (耗时 5.23秒) [成本: ¥0.0012]
+   * Console output example:
+   *   INFO: [OK] Step step1 completed (duration 5.23s) [cost: ¥0.0012]
    */
   stepEnd(
     stepId: string,
@@ -494,12 +508,12 @@ export class StructuredLogger {
     cost?: Record<string, unknown>,
     duration?: number
   ): void {
-    let message = `[OK] 步骤 ${stepId} 完成`;
-    // 如果有耗时信息，追加到消息中
-    if (duration !== undefined) message += ` (耗时 ${duration.toFixed(2)}秒)`;
-    // 如果有成本信息，追加成本（以人民币显示，保留 4 位小数）
+    let message = `[OK] Step ${stepId} completed`;
+    // Append duration when available.
+    if (duration !== undefined) message += ` (duration ${duration.toFixed(2)}s)`;
+    // Append cost when available, displayed in CNY with four decimal places.
     const totalCost = cost?.["total_cost"] as number | undefined;
-    if (totalCost !== undefined) message += ` [成本: ¥${totalCost.toFixed(4)}]`;
+    if (totalCost !== undefined) message += ` [cost: ¥${totalCost.toFixed(4)}]`;
 
     this.logEvent(
       EventType.STEP_END,
@@ -510,23 +524,23 @@ export class StructuredLogger {
   }
 
   // ========================================
-  // 便捷方法 - LLM 调用
+  // Convenience Methods - LLM Calls
   // ========================================
 
   /**
-   * 记录一次 LLM API 调用
+   * Record one LLM API call.
    *
-   * 每次调用大语言模型都应该记录，用于成本统计和性能分析。
+   * Each LLM call should be logged for cost statistics and performance analysis.
    *
-   * @param model        模型名称（如 "gpt-4o"）
-   * @param inputTokens  输入消耗的 token 数
-   * @param outputTokens 输出消耗的 token 数
-   * @param cost         本次调用的花费（人民币）
-   * @param taskId       关联的任务/步骤 ID（可选，用于按步骤统计成本）
-   * @param extra        额外数据（可选，如 prompt 长度、重试次数等）
+   * @param model        Model name, such as "gpt-4o".
+   * @param inputTokens  Number of input tokens.
+   * @param outputTokens Number of output tokens.
+   * @param cost         Cost of this call in CNY.
+   * @param taskId       Optional related task/step ID for per-step cost stats.
+   * @param extra        Optional extra data, such as prompt length or retry count.
    *
-   * 控制台输出示例：
-   *   INFO: 🤖 LLM: gpt-4o [任务 step2] - 2000 tokens, ¥0.0125
+   * Console output example:
+   *   INFO: 🤖 LLM: gpt-4o [task step2] - 2000 tokens, ¥0.0125
    */
   llmCall(
     model: string,
@@ -537,7 +551,7 @@ export class StructuredLogger {
     extra: Record<string, unknown> = {}
   ): void {
     let message = `🤖 LLM: ${model}`;
-    if (taskId) message += ` [任务 ${taskId}]`;
+    if (taskId) message += ` [task ${taskId}]`;
     message += ` - ${inputTokens + outputTokens} tokens, ¥${cost.toFixed(4)}`;
 
     this.logEvent(
@@ -557,21 +571,21 @@ export class StructuredLogger {
   }
 
   // ========================================
-  // 便捷方法 - 文件操作
+  // Convenience Methods - File Operations
   // ========================================
 
   /**
-   * 记录文件操作
+   * Record a file operation.
    *
-   * 记录级别为 DEBUG（调试级别），默认不在控制台显示。
-   * 用于追踪工作流执行过程中的文件读写操作。
+   * This logs at DEBUG level, so it is not shown in the console by default.
+   * Use it to trace file I/O during workflow execution.
    *
-   * @param operation 操作类型，如 "read"、"write"、"delete"
-   * @param filePath  文件路径
-   * @param size      文件大小（字节，可选）
-   * @param extra     额外数据（可选）
+   * @param operation Operation type, such as "read", "write", or "delete".
+   * @param filePath  File path.
+   * @param size      Optional file size in bytes.
+   * @param extra     Optional extra data.
    *
-   * 控制台输出示例（DEBUG 级别）：
+   * Console output example at DEBUG level:
    *   DEBUG: 📄 write: output.json (15.23 KB)
    */
   fileOperation(
@@ -580,11 +594,11 @@ export class StructuredLogger {
     size?: number,
     extra: Record<string, unknown> = {}
   ): void {
-    // path.basename 提取文件名（不含目录路径），让消息更简洁
-    // 例如 "/data/project/output/result.json" → "result.json"
+    // path.basename extracts only the file name so the message stays compact.
+    // For example, "/data/project/output/result.json" becomes "result.json".
     let message = `📄 ${operation}: ${path.basename(filePath)}`;
     if (size !== undefined) {
-      // 将字节数转为 KB 显示（÷1024），保留 2 位小数
+      // Convert bytes to KB and keep two decimal places.
       message += ` (${(size / 1024).toFixed(2)} KB)`;
     }
 
@@ -597,62 +611,64 @@ export class StructuredLogger {
   }
 
   // ========================================
-  // 上下文管理
+  // Context Management
   // ========================================
 
   /**
-   * 设置全局上下文字段
+   * Set global context fields.
    *
-   * 设置后，后续所有日志事件都会自动包含这些字段。
-   * 适用于"一次设置，多次使用"的场景，避免每次 logEvent 都重复传入。
+   * After setting context, all later log events automatically include these
+   * fields. This is useful for "set once, use many times" data that should not
+   * be passed to every logEvent call manually.
    *
-   * 示例：
+   * Example:
    *   logger.setContext({ workflow_name: "ocr", batch_id: "2024-01-01" });
-   *   logger.info("处理开始");
-   *   // JSONL 中会输出：{ ..., workflow_name: "ocr", batch_id: "2024-01-01", ... }
+   *   logger.info("Processing started");
+   *   // JSONL output includes: { ..., workflow_name: "ocr", batch_id: "2024-01-01", ... }
    *
-   * @param data 要合并到上下文中的键值对
+   * @param data Key-value pairs to merge into context.
    */
   setContext(data: Record<string, unknown>): void {
-    // Object.assign 将 data 的所有属性合并到 this.context 上
-    // 如果有同名键，新值会覆盖旧值
+    // Object.assign merges every data property into this.context.
+    // New values overwrite old values for duplicate keys.
     Object.assign(this.context, data);
   }
 
   /**
-   * 清除所有上下文字段
+   * Clear all context fields.
    *
-   * 通常在工作流结束后调用，防止上下文污染下一次工作流的日志。
+   * Usually called after a workflow ends so context from one workflow does not
+   * leak into the next workflow's logs.
    */
   clearContext(): void {
     this.context = {};
   }
 
   // ========================================
-  // 清理
+  // Cleanup
   // ========================================
 
   /**
-   * 关闭日志器，释放文件写入流
+   * Close the logger and release file write streams.
    *
-   * 程序退出前应调用此方法，确保：
-   *   1. 缓冲区中的数据被刷新（flush）到磁盘
-   *   2. 文件句柄被正确释放（操作系统对打开的文件数有限制）
+   * Call this before program exit to ensure:
+   *   1. Buffered data is flushed to disk.
+   *   2. File handles are released correctly.
    *
-   * ?.end() 是可选链调用：如果 stream 为 null（未启用）则跳过，不会报错
+   * ?.end() uses optional chaining: if a stream is null, it is skipped safely.
    */
   close(): void {
     this.systemLogStream?.end();
     this.humanLogStream?.end();
-    // 设为 null，防止 close 后再调用 write 导致错误
+    // Set streams to null to prevent writes after close.
     this.systemLogStream = null;
     this.humanLogStream = null;
   }
 
   /**
-   * 返回日志器的字符串表示（用于调试）
+   * Return the logger string representation for debugging.
    *
-   * 示例：StructuredLogger(logDir='data/project/logs')
+   * Example: StructuredLogger(logDir='data/project/logs')
    */
   toString(): string {
     return `StructuredLogger(logDir='${this.logDir}')`;

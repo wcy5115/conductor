@@ -25,6 +25,7 @@ Date started: 2026-04-23
 | `src/index.ts` | Checked | 2026-04-27 | Package entry exports fixed; no Chinese text found. |
 | `src/mock_llm.ts` | Checked | 2026-04-28 | Mock config validation bug fixed; tracked Chinese comments, examples, error messages, and logs translated to English. |
 | `src/core/workflow_runner.ts` | Checked | 2026-04-23 | Related start-node bug fixed; tracked Chinese text translated to English. |
+| `src/core/logging.ts` | Checked | 2026-04-28 | No confirmed behavior bug found; tracked Chinese documentation, comments, examples, and runtime log messages translated to English. |
 | `src/utils.ts` | Checked | 2026-04-27 | Image preprocessing now fails loudly for requested local images that cannot be included; tracked Chinese text translated to English. |
 | `src/workflow_actions/utils.ts` | Checked | 2026-04-27 | Zero-cost metadata now includes the project currency field; tracked Chinese text translated to English. |
 | `src/workflow_actions/llm_actions.ts` | Checked | 2026-04-23 | Multimodal prompt interpolation bug fixed; tracked Chinese text translated to English. |
@@ -103,6 +104,10 @@ Record bugs here immediately after checking each file.
 ### `src/core/workflow_runner.ts`
 
 - Fixed on 2026-04-23: `WorkflowRunner.run()` forced `startStep: "1"`, bypassing the engine's `workflowGraph.startNode` default for YAML workflows whose first node is not `1`.
+
+### `src/core/logging.ts`
+
+- No confirmed behavior bug found during the focused check on 2026-04-28.
 
 ### `src/workflow_actions/llm_actions.ts`
 
@@ -201,6 +206,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/core/workflow_runner.ts`
 
 - Translated on 2026-04-23: tracked comments and user-facing logs/errors in this file were translated to English.
+
+### `src/core/logging.ts`
+
+- Translated on 2026-04-28: module documentation, enum/type comments, examples, inline comments, workflow/step/LLM/file log messages, and console/human-log output text.
 
 ### `src/workflow_actions/llm_actions.ts`
 
@@ -335,6 +344,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/core/workflow_runner.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/core/workflow_runner.ts`.
 - Follow-up needed: none for the start-node path.
+
+### 2026-04-28 - `src/core/logging.ts`
+
+- Checked `StructuredLogger`, log-level filtering, JSONL/TXT/console output paths, workflow/step/LLM/file helper methods, close behavior, and current structured-logger call sites.
+- Bug details: see `Bugs Found` > `src/core/logging.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/core/logging.ts`.
+- Follow-up needed: none for the tracked `src/core/logging.ts` work.
 
 ### 2026-04-23 - `src/workflow_actions/llm_actions.ts`
 
@@ -498,3 +514,6 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `npm.cmd run typecheck` passed after translating the tracked `src/mock_llm.ts` text to English.
 - `npm.cmd test -- model_caller` passed with 35 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
 - `node_modules\.bin\tsx.cmd -e "import('./src/model_caller.ts').then(...)"` confirmed the translated source still returns the configured mock response for `mock-translate`.
+- `rg -n "[\p{Han}]" src/core/logging.ts` found Chinese documentation, comments, examples, and runtime log-message text during the focused check.
+- A focused code read of `src/core/logging.ts`, `src/workflow_engine.ts`, `src/workflow_loader.ts`, and `src/core/workflow_runner.ts` found no confirmed behavior bug in `src/core/logging.ts` during this pass.
+- `rg -n "[\p{Han}]" src/core/logging.ts` returned no matches after translating the tracked logging text to English.
