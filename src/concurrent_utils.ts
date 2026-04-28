@@ -296,6 +296,7 @@ export async function concurrentProcess<T>(
     //   之后的任务由信号量控制，某个任务完成后立即派发下一个
     if (i > 0 && i < maxConcurrent && delay > 0) {
       await sleep(delay);
+      if (circuitOpen) break;
     }
 
     // 为当前任务创建一个异步执行体（立即执行的 async IIFE）
@@ -308,6 +309,8 @@ export async function concurrentProcess<T>(
       // 获取信号量许可，如果并发数已满则等待其他任务完成
       await acquire();
       try {
+        if (circuitOpen) return;
+
         let status: ProcessStatus;
         let result: unknown;
         try {

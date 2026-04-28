@@ -18,6 +18,7 @@ Date started: 2026-04-23
 | `src/llm_client.ts` | Needs follow-up | 2026-04-27 | Multimodal usage-estimation bug is intentionally deferred; tracked Chinese text translated to English. |
 | `src/exceptions.ts` | Checked | 2026-04-27 | Cost currency wording fixed; tracked Chinese text translated to English. |
 | `src/cost_calculator.ts` | Checked | 2026-04-27 | Final total-cost rounding bug fixed; no Chinese text found. |
+| `src/concurrent_utils.ts` | Needs follow-up | 2026-04-28 | Circuit-breaker queued-task bug fixed; Chinese comments and logs remain untranslated. |
 | `src/workflow_loader.ts` | Checked | 2026-04-23 | Loader bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_parser.ts` | Checked | 2026-04-23 | Parser validation bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_engine.ts` | Checked | 2026-04-23 | Start-node and action-name logging bugs fixed; tracked Chinese text translated to English. |
@@ -69,6 +70,10 @@ Record bugs here immediately after checking each file.
 ### `src/cost_calculator.ts`
 
 - Fixed on 2026-04-27: `calculateCost()` and `aggregateCosts()` now round final `total_cost` values without letting binary floating-point artifacts such as `0.30000000000000004` round the value one extra tick upward.
+
+### `src/concurrent_utils.ts`
+
+- Fixed on 2026-04-28: `concurrentProcess()` now checks `circuitOpen` again after a queued task acquires a semaphore permit, so queued tasks do not call `processFunc` after the circuit breaker opens. The dispatch loop also rechecks the breaker after ramp-up delay before creating another task.
 
 ### `src/workflow_loader.ts`
 
@@ -163,6 +168,11 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 
 - No Chinese text found during the focused check on 2026-04-27.
 
+### `src/concurrent_utils.ts`
+
+- Chinese text found on 2026-04-28: module documentation, type/interface comments, section headings, inline comments, examples, default progress text, progress output, and console log/error/warning messages.
+- Follow-up: translate the tracked text to English after approval.
+
 ### `src/workflow_loader.ts`
 
 - Translated on 2026-04-23: tracked comments and user-facing strings in this file were translated to English.
@@ -253,6 +263,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/cost_calculator.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/cost_calculator.ts`.
 - Follow-up needed: none for the tracked `src/cost_calculator.ts` work.
+
+### 2026-04-28 - `src/concurrent_utils.ts`
+
+- Checked process status/result types, item-label formatting, semaphore behavior, ramp-up dispatch, circuit-breaker behavior, progress output, and the `ConcurrentAction` call site.
+- Bug details: see `Bugs Found` > `src/concurrent_utils.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/concurrent_utils.ts`.
+- Follow-up needed: translate the tracked Chinese text after approval.
 
 ### 2026-04-23 - `src/workflow_loader.ts`
 
@@ -451,3 +468,7 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]" src/llm_client.ts tests/llm_client.test.ts` returned no matches after the tracked English cleanup.
 - `npm.cmd run typecheck` passed after translating the tracked `src/llm_client.ts` and `tests/llm_client.test.ts` text to English.
 - `npm.cmd test -- llm_client` passed with 37 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]" src/concurrent_utils.ts` found Chinese module documentation, comments, examples, default progress text, and console messages during the focused check.
+- A focused runtime check of `concurrentProcess()` confirmed the circuit-breaker queued-task bug: with 3 items, `maxConcurrent = 1`, and `circuitBreakerThreshold = 1`, all 3 item handlers still ran after the first failure opened the circuit.
+- `npm.cmd run typecheck` passed after fixing the `src/concurrent_utils.ts` circuit-breaker queued-task bug.
+- `npm.cmd test -- concurrent_utils` passed with 1 test after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
