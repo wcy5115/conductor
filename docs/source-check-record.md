@@ -23,6 +23,7 @@ Date started: 2026-04-23
 | `src/workflow_parser.ts` | Checked | 2026-04-23 | Parser validation bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_engine.ts` | Checked | 2026-04-23 | Start-node and action-name logging bugs fixed; tracked Chinese text translated to English. |
 | `src/index.ts` | Checked | 2026-04-27 | Package entry exports fixed; no Chinese text found. |
+| `src/mock_llm.ts` | Checked | 2026-04-28 | Mock config validation bug fixed; tracked Chinese comments, examples, error messages, and logs translated to English. |
 | `src/core/workflow_runner.ts` | Checked | 2026-04-23 | Related start-node bug fixed; tracked Chinese text translated to English. |
 | `src/utils.ts` | Checked | 2026-04-27 | Image preprocessing now fails loudly for requested local images that cannot be included; tracked Chinese text translated to English. |
 | `src/workflow_actions/utils.ts` | Checked | 2026-04-27 | Zero-cost metadata now includes the project currency field; tracked Chinese text translated to English. |
@@ -74,6 +75,10 @@ Record bugs here immediately after checking each file.
 ### `src/concurrent_utils.ts`
 
 - Fixed on 2026-04-28: `concurrentProcess()` now checks `circuitOpen` again after a queued task acquires a semaphore permit, so queued tasks do not call `processFunc` after the circuit breaker opens. The dispatch loop also rechecks the breaker after ramp-up delay before creating another task.
+
+### `src/mock_llm.ts`
+
+- Fixed on 2026-04-28: mock model configs can now leave `api_url` empty. `src/model_caller.ts` skips the real-provider `api_url` requirement for configs detected by `isMockModel()`, so the documented `models.mock.yaml` entries route to `mockLlmCall()` before any real API endpoint is required.
 
 ### `src/workflow_loader.ts`
 
@@ -173,6 +178,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 - Chinese text found on 2026-04-28: module documentation, type/interface comments, section headings, inline comments, examples, default progress text, progress output, and console log/error/warning messages.
 - Follow-up: translate the tracked text to English after approval.
 
+### `src/mock_llm.ts`
+
+- Translated on 2026-04-28: module documentation, setup examples, type/interface comments, section headings, inline comments, thrown error messages, prompt-mismatch labels, and the mock-hit log message were translated to English.
+
 ### `src/workflow_loader.ts`
 
 - Translated on 2026-04-23: tracked comments and user-facing strings in this file were translated to English.
@@ -270,6 +279,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/concurrent_utils.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/concurrent_utils.ts`.
 - Follow-up needed: translate the tracked Chinese text after approval.
+
+### 2026-04-28 - `src/mock_llm.ts`
+
+- Checked mock-model detection, exact prompt mapping, missing-mapping errors, token usage estimation, the `callModel()` mock route, and the actual `models.mock.yaml` sample config.
+- Bug details: see `Bugs Found` > `src/mock_llm.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/mock_llm.ts`.
+- Follow-up needed: none for the tracked `src/mock_llm.ts` work.
 
 ### 2026-04-23 - `src/workflow_loader.ts`
 
@@ -472,3 +488,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - A focused runtime check of `concurrentProcess()` confirmed the circuit-breaker queued-task bug: with 3 items, `maxConcurrent = 1`, and `circuitBreakerThreshold = 1`, all 3 item handlers still ran after the first failure opened the circuit.
 - `npm.cmd run typecheck` passed after fixing the `src/concurrent_utils.ts` circuit-breaker queued-task bug.
 - `npm.cmd test -- concurrent_utils` passed with 1 test after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]" src/mock_llm.ts` found Chinese module documentation, comments, examples, thrown error messages, prompt-mismatch labels, and the mock-hit log message during the focused check.
+- `node -e "import('./dist/model_caller.js').then(...)"` confirmed the mock validation bug: `callModel("mock-translate", ...)` fails with `Missing required fields: api_url` before reaching `mockLlmCall()`, matching the `api_url: ""` examples in `src/mock_llm.ts` and `models.mock.yaml`.
+- `node_modules\.bin\tsx.cmd -e "import('./src/model_caller.ts').then(...)"` confirmed the same mock validation bug against the current TypeScript source after rerunning outside the sandbox because the first sandboxed run failed with `spawn EPERM`.
+- `npm.cmd run typecheck` passed after fixing the mock model `api_url` validation bug.
+- `npm.cmd test -- model_caller` passed with 35 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `node_modules\.bin\tsx.cmd -e "import('./src/model_caller.ts').then(...)"` confirmed the fixed source path: `callModel("mock-translate", ...)` now reaches `mockLlmCall()` and returns the configured mock response even though `models.mock.yaml` has `api_url: ""`.
+- `rg -n "[\p{Han}]" src/mock_llm.ts` returned no matches after translating the tracked mock LLM text to English.
+- `npm.cmd run typecheck` passed after translating the tracked `src/mock_llm.ts` text to English.
+- `npm.cmd test -- model_caller` passed with 35 tests after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `node_modules\.bin\tsx.cmd -e "import('./src/model_caller.ts').then(...)"` confirmed the translated source still returns the configured mock response for `mock-translate`.

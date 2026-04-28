@@ -1,60 +1,59 @@
 /**
- * Mock LLM 模块
+ * Mock LLM module.
  *
- * 提供模拟的 LLM 响应，无需真实 API 调用，不产生任何费用。
- * 主要用途：
- *   - 开发调试：快速验证工作流逻辑，无需等待 API 响应
- *   - 单元测试：确定性的输出，便于断言
- *   - CI/CD：无需配置 API 密钥即可运行集成测试
+ * Provides simulated LLM responses without real API calls or any cost.
+ * Main use cases:
+ *   - Development debugging: quickly verify workflow logic without waiting for API responses.
+ *   - Unit tests: deterministic output that is easy to assert.
+ *   - CI/CD: run integration tests without configuring API keys.
  *
- * 使用方式——在 models.yaml 中配置模型名以 "mock" 开头的模型：
+ * Usage: configure a model whose alias starts with "mock" in models.yaml:
  *
  *   mock-translate:
- *     provider: mock           # provider 可写可不写，模型名以 mock 开头会自动检测
- *     api_url: ""              # mock 模式不需要真实 URL
- *     api_key: "mock"          # mock 模式不需要真实密钥
+ *     provider: mock           # Optional; aliases starting with mock are detected automatically.
+ *     api_url: ""              # Mock mode does not need a real URL.
+ *     api_key: "mock"          # Mock mode does not need a real key.
  *     model_name: mock-translate
  *     mock_mappings:
- *       "请将以下文本翻译为英文：你好": '{"translation": "Hello"}'
- *       "请将以下文本翻译为英文：再见": '{"translation": "Goodbye"}'
+ *       "Translate this text to English: hello": '{"translation": "Hello"}'
+ *       "Translate this text to English: goodbye": '{"translation": "Goodbye"}'
  *
- * 匹配规则：
- *   - prompt 必须与 mock_mappings 中的某个 key **完全一致**才返回对应 value
- *   - 不匹配时直接抛出错误，方便排查提示词模板问题
+ * Matching rules:
+ *   - The prompt must exactly match a key in mock_mappings to return its value.
+ *   - A missing match throws immediately, which helps debug prompt template issues.
  *
- * 不同场景使用不同的 mock 模型：
- *   mock-translate:  翻译场景的模拟响应
- *   mock-summary:    摘要场景的模拟响应
- *   mock-ocr:        图片识别场景的模拟响应
+ * Use different mock models for different scenarios:
+ *   mock-translate: simulated responses for translation workflows.
+ *   mock-summary:   simulated responses for summarization workflows.
+ *   mock-ocr:       simulated responses for image recognition workflows.
  */
 
-// LlmResult 是 LLM 调用的返回值类型（content + usage），mock 也要返回相同结构
-// UsageDict 是 token 用量统计类型
+// Mock calls return the same content + usage shape as real LLM calls.
 import { LlmResult, UsageDict } from "./llm_client.js";
 
 /**
- * 简易日志器（与其他模块保持一致的设计）
+ * Minimal logger, matching the lightweight style used by the other modules.
  */
 const logger = {
   info: (msg: string) => console.info(msg),
 };
 
 // ============================================================
-// 类型定义
+// Types
 // ============================================================
 
 /**
- * Mock 模型的配置（从 models.yaml 的 SingleModelConfig 中提取 mock 相关字段）
+ * Mock-model configuration extracted from SingleModelConfig in models.yaml.
  *
- * mock_mappings: prompt → response 的精确映射表
- *   - 键（key）：完整的 prompt 文本（经过占位符替换后的最终文本）
- *   - 值（value）：对应的模拟响应文本
- *   - 类型 Record<string, string> 等价于 Python 的 dict[str, str]
+ * mock_mappings: exact prompt-to-response mapping.
+ *   - Key: the full prompt text after placeholder replacement.
+ *   - Value: the simulated response text.
+ *   - Record<string, string> is equivalent to Python's dict[str, str].
  *
- * 示例：
+ * Example:
  *   {
- *     "翻译：你好": '{"translation": "Hello"}',
- *     "翻译：再见": '{"translation": "Goodbye"}'
+ *     "Translate: hello": '{"translation": "Hello"}',
+ *     "Translate: goodbye": '{"translation": "Goodbye"}'
  *   }
  */
 export interface MockConfig {
@@ -62,43 +61,41 @@ export interface MockConfig {
 }
 
 // ============================================================
-// 核心函数
+// Core functions
 // ============================================================
 
 /**
- * 判断模型是否为 mock 模型
+ * Check whether a model should use the mock path.
  *
- * 判断依据（满足任一即可）：
- *   1. 模型简称以 "mock" 开头（如 "mock-translate"、"mock_summary"）
- *   2. provider 字段为 "mock"
+ * A model is treated as mock when either condition is true:
+ *   1. The model alias starts with "mock", such as "mock-translate" or "mock_summary".
+ *   2. The provider field is "mock".
  *
- * 之所以支持两种判断方式，是因为：
- *   - 模型名前缀检测更方便（不用额外写 provider 字段）
- *   - provider 字段检测更明确（模型名不以 mock 开头时也能用）
+ * Supporting both forms keeps configuration convenient and explicit.
  *
- * @param modelAlias 模型简称（models.yaml 中的键名）
- * @param provider   提供商名称（可选，从配置中读取）
- * @returns true 表示是 mock 模型，应走模拟路径
+ * @param modelAlias Model alias, which is the key in models.yaml.
+ * @param provider Provider name, read from the config when available.
+ * @returns true when the model should use the simulated path.
  */
 export function isMockModel(modelAlias: string, provider?: string): boolean {
   return modelAlias.startsWith("mock") || provider === "mock";
 }
 
 /**
- * 生成模拟的 LLM 响应（本模块的核心对外接口）
+ * Generate a simulated LLM response.
  *
- * 在 mock_mappings 中查找与 prompt 完全一致的 key：
- *   - 找到 → 返回对应的 value 作为响应
- *   - 找不到 → 抛出错误，列出所有可用的 key 帮助排查
+ * Looks up an exact prompt match in mock_mappings:
+ *   - Match found: return the mapped value as the response.
+ *   - No match: throw an error that lists the available keys for debugging.
  *
- * 返回值与真实 LLM 调用完全相同的 LlmResult 结构，
- * 上层代码（model_caller.ts、llm_actions.ts）无需区分 mock 与真实调用。
+ * The return value uses the same LlmResult shape as real LLM calls, so callers
+ * such as model_caller.ts and llm_actions.ts do not need a separate mock branch.
  *
- * @param prompt      用户输入的提示文本（经过占位符替换后的最终文本）
- * @param config      mock 配置（包含 mock_mappings 映射表）
- * @param modelAlias  模型简称（用于错误消息）
- * @returns LlmResult，包含 content（模拟回复）和 usage（估算的 token 用量）
- * @throws Error prompt 在 mock_mappings 中找不到匹配时抛出
+ * @param prompt User prompt after placeholder replacement.
+ * @param config Mock config containing the mock_mappings table.
+ * @param modelAlias Model alias used in error messages.
+ * @returns LlmResult containing content and estimated token usage.
+ * @throws Error when the prompt does not match any mock_mappings key.
  */
 export function mockLlmCall(
   prompt: string,
@@ -107,47 +104,45 @@ export function mockLlmCall(
 ): LlmResult {
   const mappings = config.mock_mappings;
 
-  // 第一步：检查 mock_mappings 是否已配置
+  // Step 1: make sure mock_mappings exists.
   if (!mappings || Object.keys(mappings).length === 0) {
     throw new Error(
-      `[Mock] 模型 '${modelAlias}' 未配置 mock_mappings\n` +
-        `请在 models.yaml 中添加 mock_mappings 字段，示例：\n` +
+      `[Mock] Model '${modelAlias}' has no mock_mappings configured.\n` +
+        `Add a mock_mappings field in models.yaml, for example:\n` +
         `  ${modelAlias}:\n` +
         `    provider: mock\n` +
         `    api_url: ""\n` +
         `    api_key: "mock"\n` +
         `    model_name: ${modelAlias}\n` +
         `    mock_mappings:\n` +
-        `      "你的prompt文本": "期望的响应"`
+        `      "your prompt text": "expected response"`
     );
   }
 
-  // 第二步：精确匹配 prompt
+  // Step 2: exact prompt match.
   const content = mappings[prompt];
 
   if (content === undefined) {
-    // 找不到匹配：列出所有可用的 key，帮助用户对比排查
-    // 每个 key 截取前 80 个字符，避免日志过长
+    // List available keys to make prompt-template mismatches easier to compare.
     const availableKeys = Object.keys(mappings)
       .map((k, i) => `  ${i + 1}. "${k.length > 80 ? k.slice(0, 80) + "..." : k}"`)
       .join("\n");
 
-    // prompt 也截取前 200 个字符用于展示
+    // Keep the received prompt preview short enough for readable logs.
     const promptPreview = prompt.length > 200 ? prompt.slice(0, 200) + "..." : prompt;
 
     throw new Error(
-      `[Mock] 模型 '${modelAlias}' 找不到匹配的 prompt\n\n` +
-        `【收到的 prompt】\n  "${promptPreview}"\n\n` +
-        `【mock_mappings 中可用的 key】\n${availableKeys}\n\n` +
-        `提示：mock 模式要求 prompt 与 key 完全一致（包括空格和换行）`
+      `[Mock] Model '${modelAlias}' has no matching prompt.\n\n` +
+        `Received prompt:\n  "${promptPreview}"\n\n` +
+        `Available keys in mock_mappings:\n${availableKeys}\n\n` +
+        `Hint: mock mode requires the prompt to match a key exactly, including spaces and line breaks.`
     );
   }
 
-  logger.info(`[Mock] ${modelAlias} 命中映射，返回模拟响应 (${content.length} 字符)`);
+  logger.info(`[Mock] ${modelAlias} matched a mapping; returning simulated response (${content.length} chars)`);
 
-  // 第三步：构造 token 用量估算
-  // mock 模式下没有真实的 token 消耗，但上层代码（成本计算、日志）需要 usage 字段
-  // 使用简单的字符数估算：每 2 个字符约 1 个 token（中英文折中值）
+  // Step 3: estimate token usage. Mock mode has no real token consumption, but
+  // cost calculation and logs still expect a usage object.
   const estimatedPromptTokens = Math.ceil(prompt.length / 2);
   const estimatedCompletionTokens = Math.ceil(content.length / 2);
 

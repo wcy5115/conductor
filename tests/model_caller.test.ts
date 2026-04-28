@@ -219,6 +219,31 @@ describe("callModel", () => {
     expect(mockChat).not.toHaveBeenCalled();
   });
 
+  it("allows mock models to leave api_url empty", async () => {
+    MODEL_MAPPINGS["mock-empty-url"] = makeConfig({
+      provider: "mock",
+      api_url: "",
+      api_key: "mock",
+      model_name: "mock-empty-url",
+      mock_mappings: { "test prompt": "mock response" },
+    });
+    mockIsMockModel.mockReturnValue(true);
+    mockMockLlmCall.mockReturnValue({
+      content: "mock response",
+      usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+    });
+
+    const result = await callModel("mock-empty-url", "test prompt");
+
+    expect(result.content).toBe("mock response");
+    expect(mockMockLlmCall).toHaveBeenCalledWith(
+      "test prompt",
+      { mock_mappings: { "test prompt": "mock response" } },
+      "mock-empty-url"
+    );
+    expect(mockChat).not.toHaveBeenCalled();
+  });
+
   it("throws and lists available models when the alias is unknown", async () => {
     await expect(callModel("missing-model", "hello")).rejects.toThrow("Unknown model alias");
     await expect(callModel("missing-model", "hello")).rejects.toThrow("missing-model");

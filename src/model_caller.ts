@@ -208,16 +208,23 @@ export let MODEL_MAPPINGS: ModelMappings = loadModelMappings();
 /**
  * Validate that a provider config has the required fields.
  *
+ * api_url is required only for real provider models. Mock models never contact
+ * a provider endpoint, so their documented config can leave api_url empty.
+ *
  * api_key is checked by key existence here, not by truthiness, because an unset
  * environment variable intentionally resolves to an empty string. callModel()
- * later turns that empty key into a clearer runtime error.
+ * later turns that empty key into a clearer runtime error for real providers.
  */
 function validateConfigFields(
   config: Partial<SingleModelConfig>,
   modelAlias: string,
   providerName: string
 ): void {
-  const requiredFields: (keyof SingleModelConfig)[] = ["provider", "api_url", "model_name"];
+  const requiredFields: (keyof SingleModelConfig)[] = ["provider", "model_name"];
+  if (!isMockModel(modelAlias, config.provider)) {
+    requiredFields.push("api_url");
+  }
+
   const missing = requiredFields.filter((f) => !config[f]);
 
   if (!("api_key" in config)) {
