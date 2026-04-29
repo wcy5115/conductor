@@ -26,6 +26,7 @@ Date started: 2026-04-23
 | `src/mock_llm.ts` | Checked | 2026-04-28 | Mock config validation bug fixed; tracked Chinese comments, examples, error messages, and logs translated to English. |
 | `src/core/workflow_runner.ts` | Checked | 2026-04-23 | Related start-node bug fixed; tracked Chinese text translated to English. |
 | `src/core/logging.ts` | Checked | 2026-04-28 | No confirmed behavior bug found; tracked Chinese documentation, comments, examples, and runtime log messages translated to English. |
+| `src/validators/simple_json_validator.ts` | Checked | 2026-04-28 | Invalid non-object preview bug fixed; tracked explanatory text and runtime messages translated to English while preserving schema field names. |
 | `src/utils.ts` | Checked | 2026-04-27 | Image preprocessing now fails loudly for requested local images that cannot be included; tracked Chinese text translated to English. |
 | `src/workflow_actions/utils.ts` | Checked | 2026-04-27 | Zero-cost metadata now includes the project currency field; tracked Chinese text translated to English. |
 | `src/workflow_actions/llm_actions.ts` | Checked | 2026-04-23 | Multimodal prompt interpolation bug fixed; tracked Chinese text translated to English. |
@@ -108,6 +109,10 @@ Record bugs here immediately after checking each file.
 ### `src/core/logging.ts`
 
 - No confirmed behavior bug found during the focused check on 2026-04-28.
+
+### `src/validators/simple_json_validator.ts`
+
+- Fixed on 2026-04-29: `SimpleJSONValidator.validate()` now formats invalid non-object values with a safe preview helper before throwing the intended validation error. The helper handles cases where `JSON.stringify()` returns `undefined` or throws, so inputs such as `undefined`, functions, symbols, and bigint values no longer crash the error-reporting path with `TypeError`.
 
 ### `src/workflow_actions/llm_actions.ts`
 
@@ -210,6 +215,11 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/core/logging.ts`
 
 - Translated on 2026-04-28: module documentation, enum/type comments, examples, inline comments, workflow/step/LLM/file log messages, and console/human-log output text.
+
+### `src/validators/simple_json_validator.ts`
+
+- Translated on 2026-04-29: module documentation, class documentation, examples, inline comments, thrown error messages, error-report labels, and the debug success message.
+- The JSON schema field names `页码` and `内容` were intentionally preserved because they are part of this validator's data contract.
 
 ### `src/workflow_actions/llm_actions.ts`
 
@@ -351,6 +361,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/core/logging.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/core/logging.ts`.
 - Follow-up needed: none for the tracked `src/core/logging.ts` work.
+
+### 2026-04-28 - `src/validators/simple_json_validator.ts`
+
+- Checked `SimpleJSONValidator.validate()`, required-field checks, invalid input handling, error-message construction, debug output, and validator usage from the registry/action path.
+- Bug details: see `Bugs Found` > `src/validators/simple_json_validator.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/validators/simple_json_validator.ts`.
+- Follow-up needed: none for the tracked `src/validators/simple_json_validator.ts` work.
 
 ### 2026-04-23 - `src/workflow_actions/llm_actions.ts`
 
@@ -517,3 +534,9 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]" src/core/logging.ts` found Chinese documentation, comments, examples, and runtime log-message text during the focused check.
 - A focused code read of `src/core/logging.ts`, `src/workflow_engine.ts`, `src/workflow_loader.ts`, and `src/core/workflow_runner.ts` found no confirmed behavior bug in `src/core/logging.ts` during this pass.
 - `rg -n "[\p{Han}]" src/core/logging.ts` returned no matches after translating the tracked logging text to English.
+- `rg -n "[\p{Han}]" src/validators/simple_json_validator.ts` found Chinese documentation, comments, examples, thrown error messages, and debug output during the focused check.
+- A focused code read of `src/validators/simple_json_validator.ts`, `src/validators/index.ts`, and the validator call site in `src/workflow_actions/llm_actions.ts` confirmed the invalid non-object error-report crash in `SimpleJSONValidator.validate()`.
+- `npm.cmd run typecheck` passed after fixing the `src/validators/simple_json_validator.ts` invalid non-object error-report crash.
+- `node_modules\.bin\tsx.cmd -e "..."` confirmed invalid `undefined`, function, symbol, and bigint inputs now throw the intended validation `Error` instead of `TypeError`. The first sandboxed `tsx` run failed with `spawn EPERM`, so it was rerun outside the sandbox.
+- `rg -n "[\p{Han}]" src/validators/simple_json_validator.ts` now returns only the preserved schema field names `页码` and `内容` after the tracked English translation.
+- `npm.cmd run typecheck` passed after translating the tracked `src/validators/simple_json_validator.ts` text to English.
