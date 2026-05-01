@@ -18,7 +18,7 @@ Date started: 2026-04-23
 | `src/llm_client.ts` | Needs follow-up | 2026-04-27 | Multimodal usage-estimation bug is intentionally deferred; tracked Chinese text translated to English. |
 | `src/exceptions.ts` | Checked | 2026-04-27 | Cost currency wording fixed; tracked Chinese text translated to English. |
 | `src/cost_calculator.ts` | Checked | 2026-04-27 | Final total-cost rounding bug fixed; no Chinese text found. |
-| `src/concurrent_utils.ts` | Needs follow-up | 2026-04-28 | Circuit-breaker queued-task bug fixed; Chinese comments and logs remain untranslated. |
+| `src/concurrent_utils.ts` | Checked | 2026-05-01 | Circuit-breaker queued-task bug fixed; tracked Chinese documentation, comments, examples, default progress text, and logs translated to English. |
 | `src/workflow_loader.ts` | Checked | 2026-04-23 | Loader bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_parser.ts` | Checked | 2026-04-23 | Parser validation bugs fixed; tracked Chinese text translated to English. |
 | `src/workflow_engine.ts` | Checked | 2026-04-23 | Start-node and action-name logging bugs fixed; tracked Chinese text translated to English. |
@@ -205,8 +205,7 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 
 ### `src/concurrent_utils.ts`
 
-- Chinese text found on 2026-04-28: module documentation, type/interface comments, section headings, inline comments, examples, default progress text, progress output, and console log/error/warning messages.
-- Follow-up: translate the tracked text to English after approval.
+- Translated on 2026-05-01: module documentation, type/interface comments, section headings, inline comments, examples, default progress text, progress output, and console log/error/warning messages.
 
 ### `src/mock_llm.ts`
 
@@ -335,7 +334,7 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Checked process status/result types, item-label formatting, semaphore behavior, ramp-up dispatch, circuit-breaker behavior, progress output, and the `ConcurrentAction` call site.
 - Bug details: see `Bugs Found` > `src/concurrent_utils.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/concurrent_utils.ts`.
-- Follow-up needed: translate the tracked Chinese text after approval.
+- Follow-up needed: none for the tracked `src/concurrent_utils.ts` work.
 
 ### 2026-04-28 - `src/mock_llm.ts`
 
@@ -587,6 +586,8 @@ Add one entry per checked file. Each entry should record what was checked and po
 - A focused runtime check of `concurrentProcess()` confirmed the circuit-breaker queued-task bug: with 3 items, `maxConcurrent = 1`, and `circuitBreakerThreshold = 1`, all 3 item handlers still ran after the first failure opened the circuit.
 - `npm.cmd run typecheck` passed after fixing the `src/concurrent_utils.ts` circuit-breaker queued-task bug.
 - `npm.cmd test -- concurrent_utils` passed with 1 test after rerunning outside the sandbox because the first sandboxed Vitest run failed with `spawn EPERM`.
+- `rg -n "[\p{Han}]" src/concurrent_utils.ts` returned no matches after translating the tracked concurrent utility text to English.
+- `npm.cmd run typecheck` passed after translating the tracked `src/concurrent_utils.ts` text to English.
 - `rg -n "[\p{Han}]" src/mock_llm.ts` found Chinese module documentation, comments, examples, thrown error messages, prompt-mismatch labels, and the mock-hit log message during the focused check.
 - `node -e "import('./dist/model_caller.js').then(...)"` confirmed the mock validation bug: `callModel("mock-translate", ...)` fails with `Missing required fields: api_url` before reaching `mockLlmCall()`, matching the `api_url: ""` examples in `src/mock_llm.ts` and `models.mock.yaml`.
 - `node_modules\.bin\tsx.cmd -e "import('./src/model_caller.ts').then(...)"` confirmed the same mock validation bug against the current TypeScript source after rerunning outside the sandbox because the first sandboxed run failed with `spawn EPERM`.

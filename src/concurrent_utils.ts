@@ -1,60 +1,66 @@
 /**
- * 通用并发处理工具模块
+ * General-purpose concurrent processing utilities.
  *
- * 提供一个开箱即用的 concurrentProcess() 函数，用于批量并发执行异步任务。
- * 内置三大机制：
- *   1. 信号量（Semaphore）— 限制同时运行的任务数，防止资源耗尽
- *   2. 熔断器（Circuit Breaker）— 连续失败达到阈值时自动停止派发新任务
- *   3. 渐进式派发 — 前几个任务之间加延迟，避免瞬间并发冲击（如 API 限流）
+ * Provides a ready-to-use concurrentProcess() function for running batches of
+ * asynchronous tasks concurrently.
+ * Built-in mechanisms:
+ *   1. Semaphore - limits the number of simultaneously running tasks to avoid resource exhaustion.
+ *   2. Circuit breaker - stops dispatching new tasks after consecutive failures reach the threshold.
+ *   3. Gradual dispatch - adds a delay between the first few tasks to avoid sudden load spikes, such as API rate limits.
  *
- * 典型使用场景：
- *   - 批量调用 LLM API（每次调用耗时数秒，需要并发加速）
- *   - 批量读写文件（需要控制 I/O 并发数）
- *   - 任何需要"失败自动停止"保护的批量操作
+ * Typical use cases:
+ *   - Batch LLM API calls, where each call may take several seconds and concurrency improves throughput.
+ *   - Batch file reads or writes that need controlled I/O concurrency.
+ *   - Any batch operation that should stop automatically after repeated failures.
  */
 
 // ============================================================
-// 类型定义
+// Type definitions
 // ============================================================
 
 /**
- * 单个任务的处理状态，共四种取值：
- *   "success"         — 任务成功完成
- *   "retriable_error" — 可重试的错误（如网络超时、API 限流），当前版本不自动重试，但会计入熔断器
- *   "fatal_error"     — 致命错误（如参数错误、权限不足），不应重试，同样计入熔断器
- *   "skipped"         — 任务被跳过（如输出文件已存在，无需重复处理）
+ * Processing status for one task:
+ *   "success"         - the task completed successfully.
+ *   "retriable_error" - a retriable error, such as a network timeout or API rate limit.
+ *                       This version does not retry automatically, but it still counts toward the circuit breaker.
+ *   "fatal_error"     - a fatal error, such as invalid parameters or insufficient permissions.
+ *                       It should not be retried and also counts toward the circuit breaker.
+ *   "skipped"         - the task was skipped, such as when the output file already exists.
  *
- * 注意：retriable_error 和 fatal_error 在当前实现中行为相同（都算失败），
- * 区分它们是为了让调用方在结果中能区分错误类型，方便后续决策（如是否人工重试）。
+ * Note: retriable_error and fatal_error behave the same in the current
+ * implementation because both count as failures. They remain separate so
+ * callers can distinguish error types in results and decide what to do next,
+ * such as whether to retry manually.
  */
 export type ProcessStatus = "success" | "retriable_error" | "fatal_error" | "skipped";
 
 /**
- * 单个任务的处理结果记录
+ * Processing result record for one task.
  *
- * 示例（成功）：{ status: "success", item: "page_1", result: { text: "..." } }
- * 示例（失败）：{ status: "fatal_error", item: "page_2", result: { error: "API 返回 500" } }
- * 示例（跳过）：{ status: "skipped", item: "page_3", result: null }
+ * Success example: { status: "success", item: "page_1", result: { text: "..." } }
+ * Failure example: { status: "fatal_error", item: "page_2", result: { error: "API returned 500" } }
+ * Skipped example: { status: "skipped", item: "page_3", result: null }
  */
 export interface ItemResult {
-  /** 任务的处理状态，取值见 ProcessStatus */
+  /** Processing status for this task. See ProcessStatus. */
   status: ProcessStatus;
-  /** 原始任务项的字符串表示，由 String(item) 生成，用于在结果中标识是哪个任务 */
+  /** String representation of the original item, generated with String(item), for identifying the task in results. */
   item: string;
   /**
-   * 任务的返回值：
-   *   - 成功/跳过时：processFunc 返回的原始 result 值（可以是任意类型）
-   *   - 失败时：固定格式 { error: string }，包含错误描述信息
+   * Return value for the task:
+   *   - On success or skip: the raw result value returned by processFunc, which may be any type.
+   *   - On failure: a fixed { error: string } shape containing the error description.
    */
   result: unknown;
 }
 
 /**
- * 批量处理的汇总统计
+ * Summary statistics for a batch run.
  *
- * concurrentProcess() 执行完毕后返回此对象，调用方可据此判断整体结果。
+ * concurrentProcess() returns this object after it finishes, so callers can
+ * evaluate the overall result.
  *
- * 示例返回值：
+ * Example return value:
  * {
  *   total: 100,
  *   success: 95,
@@ -65,95 +71,95 @@ export interface ItemResult {
  * }
  */
 export interface ProcessStats {
-  /** 任务总数（等于传入的 items.length） */
+  /** Total number of tasks, equal to items.length. */
   total: number;
-  /** 成功完成的任务数 */
+  /** Number of successfully completed tasks. */
   success: number;
-  /** 失败的任务数（含 retriable_error 和 fatal_error） */
+  /** Number of failed tasks, including retriable_error and fatal_error. */
   failed: number;
-  /** 被跳过的任务数 */
+  /** Number of skipped tasks. */
   skipped: number;
-  /** 熔断器是否触发过（true 表示有部分任务因连续失败未被执行） */
+  /** Whether the circuit breaker was triggered. True means some tasks were not executed after consecutive failures. */
   circuitBreakerTriggered: boolean;
-  /** 所有已处理任务的结果列表（含成功、失败、跳过），顺序为完成顺序而非输入顺序 */
+  /** Results for all processed tasks, including success, failure, and skipped items, in completion order instead of input order. */
   items: ItemResult[];
 }
 
 // ============================================================
-// 辅助函数
+// Helper functions
 // ============================================================
 
 /**
- * 生成简洁的任务标签，用于日志输出
+ * Build a concise task label for log output.
  *
- * 根据 item 的类型智能提取可读标签：
- *   - 元组 [index, realItem]：解包后取 realItem 部分（ConcurrentAction 传入的格式）
- *   - 文件路径字符串：只显示文件名（去掉目录前缀）
- *   - 长字符串：截断到 60 字符
- *   - 字典对象：显示前 3 个 key
- *   - 其他类型：转字符串后截断
+ * Extracts a readable label based on the item type:
+ *   - Tuple [realItem, index]: unwraps the realItem part, which is the format passed by ConcurrentAction.
+ *   - File path string: shows only the filename without the directory prefix.
+ *   - Long string: truncates to 60 characters.
+ *   - Dictionary object: shows the first three keys.
+ *   - Other types: converts to string and truncates.
  *
- * @param item 原始任务项
- * @returns 适合放在日志中的简短标签
+ * @param item Original task item.
+ * @returns Short label suitable for logs.
  *
- * 使用示例：
+ * Examples:
  *   formatItemLabel(["page_001.png", 0])  → "page_001.png"
  *   formatItemLabel("/data/output/page_001.json")  → "page_001.json"
  *   formatItemLabel({ text: "...", index: 1, lang: "zh" })  → "{text, index, lang}"
  */
 export function formatItemLabel(item: unknown): string {
-  // 第一步：如果是 [realItem, index] 元组（ConcurrentAction 传入的格式），解包取 realItem
-  // Array.isArray 检查是否是数组，length === 2 确认是二元组
+  // Step 1: unwrap [realItem, index] tuples passed by ConcurrentAction.
+  // Array.isArray checks that the value is an array, and length === 2 confirms the tuple shape.
   let realItem = item;
   if (Array.isArray(item) && item.length === 2) {
     realItem = item[0];
   }
 
-  // 第二步：根据类型生成标签
+  // Step 2: build the label based on the value type.
   if (typeof realItem === "string") {
-    // 如果字符串包含路径分隔符，说明是文件路径，只取文件名部分
-    // 同时兼容 / 和 \ 两种分隔符（Linux / Windows）
+    // If the string contains a path separator, treat it as a file path and keep only the filename.
+    // Supports both / and \ separators for Linux and Windows.
     if (realItem.includes("/") || realItem.includes("\\")) {
-      // 取最后一个分隔符之后的部分
+      // Take the portion after the last separator.
       const parts = realItem.replace(/\\/g, "/").split("/");
       return parts[parts.length - 1] || realItem.slice(0, 60);
     }
-    // 普通字符串：截断到 60 字符
+    // Regular string: truncate to 60 characters.
     return realItem.length > 60 ? realItem.slice(0, 60) + "..." : realItem;
   }
 
   if (realItem !== null && typeof realItem === "object" && !Array.isArray(realItem)) {
-    // 字典对象：显示前 3 个 key，超过 3 个时加 "+N" 后缀
+    // Dictionary object: show the first three keys and add a "+N" suffix when more keys exist.
     const keys = Object.keys(realItem as Record<string, unknown>).slice(0, 3);
     const extra = Object.keys(realItem as Record<string, unknown>).length - 3;
     const suffix = extra > 0 ? ` +${extra}` : "";
     return `{${keys.join(", ")}${suffix}}`;
   }
 
-  // 其他类型：转字符串后截断
+  // Other types: convert to string and truncate.
   const s = String(realItem);
   return s.length > 60 ? s.slice(0, 60) + "..." : s;
 }
 
 // ============================================================
-// 核心函数：concurrentProcess
+// Core function: concurrentProcess
 // ============================================================
 
 /**
- * 并发处理批量任务（渐进式派发）
+ * Process a batch of tasks concurrently with gradual dispatch.
  *
- * ⭐ 断点续存已内置：processFunc 应自行判断是否跳过已处理项目
+ * Resume support is built in: processFunc should decide whether to skip already processed items.
  *
- * @param items 待处理项目列表
- * @param processFunc 处理函数，返回 `[status, result]`。
- *   - `"success"` / `"skipped"` — result 为实际结果
- *   - `"retriable_error"` / `"fatal_error"` — result 为错误描述，存入 `{ error: string }`
- *   - 抛出异常等同于返回 `"fatal_error"`
- * @param maxConcurrent 最大并发任务数（默认 5）
- * @param taskDispatchDelay 初始派发延迟秒数，undefined 时读取环境变量 TASK_DISPATCH_DELAY（默认 0.5）
- * @param progressDesc 进度描述文字
- * @param circuitBreakerThreshold 连续失败多少次触发熔断（默认 10）
- * @returns 所有任务的汇总统计，含成功/失败/跳过数量及每个任务的详细结果
+ * @param items Items to process.
+ * @param processFunc Processing function that returns `[status, result]`.
+ *   - `"success"` / `"skipped"` - result is the actual result.
+ *   - `"retriable_error"` / `"fatal_error"` - result is an error description stored as `{ error: string }`.
+ *   - Throwing an exception is equivalent to returning `"fatal_error"`.
+ * @param maxConcurrent Maximum number of concurrent tasks. Defaults to 5.
+ * @param taskDispatchDelay Initial dispatch delay in seconds. When undefined, reads TASK_DISPATCH_DELAY and falls back to 0.5.
+ * @param progressDesc Progress description text.
+ * @param circuitBreakerThreshold Number of consecutive failures that triggers the circuit breaker. Defaults to 10.
+ * @returns Summary statistics for all tasks, including success/failure/skipped counts and per-task details.
  *
  * @example
  * ```typescript
@@ -169,17 +175,17 @@ export async function concurrentProcess<T>(
   processFunc: (item: T) => Promise<[ProcessStatus, unknown]> | [ProcessStatus, unknown],
   maxConcurrent = 5,
   taskDispatchDelay?: number,
-  progressDesc = "处理进度",
+  progressDesc = "Processing progress",
   circuitBreakerThreshold = 10,
 ): Promise<ProcessStats> {
-  // 确定派发延迟：优先使用显式传入的值，否则读环境变量，最终兜底 0.5 秒
-  // 环境变量 TASK_DISPATCH_DELAY 允许运维人员在不改代码的情况下调整延迟
-  // ?? 是 nullish coalescing 运算符，仅在左侧为 null/undefined 时取右侧值
+  // Determine the dispatch delay: prefer the explicit argument, then the environment variable, then 0.5 seconds.
+  // TASK_DISPATCH_DELAY lets operators adjust the delay without changing code.
+  // ?? is the nullish coalescing operator; it uses the right side only when the left side is null or undefined.
   const delay = taskDispatchDelay ?? parseFloat(process.env["TASK_DISPATCH_DELAY"] ?? "0.5");
 
   const total = items.length;
 
-  // 初始化统计对象，所有计数器从 0 开始
+  // Initialize statistics; all counters start from 0.
   const stats: ProcessStats = {
     total,
     success: 0,
@@ -190,123 +196,123 @@ export async function concurrentProcess<T>(
   };
 
   // ──────────────────────────────────────────────
-  // 信号量（Semaphore）：控制最大并发数
+  // Semaphore: controls maximum concurrency.
   // ──────────────────────────────────────────────
-  // 工作原理：
-  //   permits 表示当前可用的"许可证"数量，初始值等于 maxConcurrent。
-  //   每个任务执行前必须 acquire() 获取一个许可证（permits--），
-  //   执行完毕后 release() 归还许可证（permits++）。
-  //   当 permits 降为 0 时，后续任务的 acquire() 会排队等待（进入 semQueue），
-  //   直到有其他任务 release() 归还许可证后才被唤醒。
+  // How it works:
+  //   permits is the number of currently available permits and starts at maxConcurrent.
+  //   Each task must call acquire() before running to take one permit (permits--).
+  //   After the task finishes, release() returns the permit (permits++).
+  //   When permits reaches 0, later acquire() calls wait in semQueue until another task calls release().
   //
-  // 为什么不用第三方信号量库：
-  //   实现只需十行代码，引入额外依赖反而增加维护成本。
+  // Why not use a third-party semaphore library:
+  //   The implementation only needs a few lines, and an extra dependency would increase maintenance cost.
   //
-  // 示例（maxConcurrent=2）：
-  //   任务A acquire → permits=1 → 开始执行
-  //   任务B acquire → permits=0 → 开始执行
-  //   任务C acquire → permits=0 → 进入等待队列
-  //   任务A release → 从队列唤醒任务C → 任务C开始执行
+  // Example with maxConcurrent=2:
+  //   Task A acquire -> permits=1 -> starts running
+  //   Task B acquire -> permits=0 -> starts running
+  //   Task C acquire -> permits=0 -> enters the wait queue
+  //   Task A release -> wakes Task C from the queue -> Task C starts running
   let permits = maxConcurrent;
-  // semQueue 是等待队列，存放被阻塞的 acquire() 调用的 resolve 函数
-  // 当有许可证归还时，从队首取出一个 resolve 调用，唤醒对应的任务
+  // semQueue is the wait queue. It stores resolve functions for blocked acquire() calls.
+  // When a permit is returned, the first resolve is called to wake the corresponding task.
   const semQueue: Array<() => void> = [];
 
   /**
-   * 获取一个许可证。如果有剩余许可（permits > 0），立即返回；
-   * 否则返回一个 Promise，该 Promise 会在其他任务 release() 时被 resolve。
+   * Acquire one permit. If permits remain, return immediately.
+   * Otherwise, return a Promise that resolves when another task calls release().
    */
   const acquire = (): Promise<void> => {
     if (permits > 0) { permits--; return Promise.resolve(); }
-    // 没有剩余许可，创建一个 Promise 并把它的 resolve 函数存入队列
-    // 当其他任务调用 release() 时，会从队列中取出这个 resolve 并调用，Promise 就被解决了
+    // No permits remain, so create a Promise and store its resolve function in the queue.
+    // When another task calls release(), this resolve is removed from the queue and called.
     return new Promise<void>((resolve) => semQueue.push(resolve));
   };
 
   /**
-   * 归还一个许可证。如果有任务在等待（semQueue 非空），直接唤醒队首任务；
-   * 否则将 permits 加回。
+   * Release one permit. If any task is waiting, wake the first queued task directly.
+   * Otherwise, add the permit back.
    *
-   * 注意：唤醒队首任务时不增加 permits，因为许可证直接"转让"给了被唤醒的任务。
-   * 这是信号量的标准实现模式，避免了 permits 短暂增加后又被减少的竞态问题。
-   * （虽然 JS 是单线程的不存在真正的竞态，但这种写法更规范且高效。）
+   * Note: when waking the first queued task, permits is not incremented because the
+   * permit is transferred directly to that task. This is the standard semaphore
+   * pattern and avoids a brief increment-then-decrement window.
    */
   const release = (): void => {
-    if (semQueue.length > 0) { semQueue.shift()!(); }  // shift() 取出队首，!() 立即调用
+    if (semQueue.length > 0) { semQueue.shift()!(); }  // shift() removes the first queued resolver; !() calls it immediately.
     else { permits++; }
   };
 
   // ──────────────────────────────────────────────
-  // 熔断器（Circuit Breaker）：连续失败时自动停止
+  // Circuit breaker: stops automatically after consecutive failures.
   // ──────────────────────────────────────────────
-  // 工作原理：
-  //   failureCount 记录连续失败的次数。
-  //   每次任务成功时重置为 0（recordSuccess），说明系统恢复正常。
-  //   每次任务失败时加 1（recordFailure），达到阈值时将 circuitOpen 设为 true。
-  //   circuitOpen=true 后，for 循环中的 break 会停止派发新任务，
-  //   已经在执行的任务会提前 return（不做实际处理）。
+  // How it works:
+  //   failureCount records the number of consecutive failures.
+  //   Each successful task resets it to 0 with recordSuccess(), indicating the system recovered.
+  //   Each failed task increments it with recordFailure(); reaching the threshold sets circuitOpen to true.
+  //   Once circuitOpen=true, the break in the for loop stops dispatching new tasks.
+  //   Tasks that are already running return early before doing real work.
   //
-  // 典型场景：API 密钥失效导致所有请求都会失败，
-  //   此时熔断器能快速停止，避免浪费时间和金钱继续发送注定失败的请求。
+  // Typical case: an invalid API key makes every request fail. The circuit breaker
+  // stops quickly so the process does not keep sending requests that are doomed to fail.
   let failureCount = 0;
   let circuitOpen = false;
 
-  /** 记录一次成功，将连续失败计数器归零 */
+  /** Record one success and reset the consecutive failure counter. */
   const recordSuccess = () => { failureCount = 0; };
 
   /**
-   * 记录一次失败，连续失败计数器加 1。
-   * 如果达到阈值且熔断器尚未触发，则触发熔断，返回 true；否则返回 false。
+   * Record one failure and increment the consecutive failure counter.
+   * If the threshold is reached and the circuit has not opened yet, open it and return true.
+   * Otherwise, return false.
    */
   const recordFailure = (): boolean => {
     failureCount++;
     if (failureCount >= circuitBreakerThreshold && !circuitOpen) {
       circuitOpen = true;
-      return true;  // 返回 true 表示"刚刚触发了熔断"
+      return true;  // true means the circuit breaker was just triggered.
     }
-    return false;  // 返回 false 表示"还没达到熔断阈值"
+    return false;  // false means the failure threshold has not been reached yet.
   };
 
   console.info(
-    `并发处理器初始化 - 最大并发:${maxConcurrent}, 派发延迟:${delay}秒, 熔断阈值:${circuitBreakerThreshold}`,
+    `Concurrent processor initialized - max concurrency:${maxConcurrent}, dispatch delay:${delay}s, circuit breaker threshold:${circuitBreakerThreshold}`,
   );
 
   // ──────────────────────────────────────────────
-  // 任务派发与执行
+  // Task dispatch and execution
   // ──────────────────────────────────────────────
-  // promises 数组收集所有任务的 Promise，最后用 Promise.all 等待全部完成
+  // The promises array collects all task Promises, then Promise.all waits for them to finish.
   const promises: Promise<void>[] = [];
 
-  // items.entries() 返回 [index, item] 的迭代器，类似 Python 的 enumerate()
+  // items.entries() returns an [index, item] iterator, similar to Python's enumerate().
   for (const [i, item] of items.entries()) {
-    // 熔断器已触发 → 停止派发新任务，跳出循环
-    // 注意：已经派发但尚未完成的任务不受影响，它们会在 acquire() 后检查 circuitOpen
+    // If the circuit breaker has opened, stop dispatching new tasks and exit the loop.
+    // Already-dispatched tasks are unaffected; they check circuitOpen after acquire().
     if (circuitOpen) break;
 
-    // 渐进式派发（Ramp-up）：前 maxConcurrent 个任务之间加延迟
-    // 目的：避免瞬间并发冲击外部服务（如 LLM API 可能有限流策略）
-    // 条件解释：
-    //   i > 0        → 第一个任务不需要延迟
-    //   i < maxConcurrent → 只在填满并发池的过程中加延迟，之后由信号量自然调控
-    //   delay > 0    → 延迟为 0 时无需等待
-    // 示例（maxConcurrent=3, delay=0.5s）：
-    //   t=0.0s: 派发任务0
-    //   t=0.5s: 派发任务1
-    //   t=1.0s: 派发任务2（并发池已满）
-    //   之后的任务由信号量控制，某个任务完成后立即派发下一个
+    // Gradual dispatch (ramp-up): add a delay between the first maxConcurrent tasks.
+    // Purpose: avoid an instant load spike against external services, such as LLM APIs with rate limits.
+    // Conditions:
+    //   i > 0             -> the first task does not need a delay
+    //   i < maxConcurrent -> delay only while filling the concurrency pool; the semaphore controls later tasks
+    //   delay > 0         -> no wait is needed when the delay is 0
+    // Example with maxConcurrent=3 and delay=0.5s:
+    //   t=0.0s: dispatch task 0
+    //   t=0.5s: dispatch task 1
+    //   t=1.0s: dispatch task 2; the concurrency pool is full
+    //   Later tasks are controlled by the semaphore and start as soon as a task finishes.
     if (i > 0 && i < maxConcurrent && delay > 0) {
       await sleep(delay);
       if (circuitOpen) break;
     }
 
-    // 为当前任务创建一个异步执行体（立即执行的 async IIFE）
-    // 使用 IIFE（立即调用函数表达式）是为了让每个任务独立运行而不阻塞 for 循环
+    // Create an async execution body for the current task with an immediately invoked async function.
+    // The IIFE lets each task run independently without blocking the for loop.
     const p = (async () => {
-      // 在等待信号量之前再次检查熔断状态
-      // 可能在排队等待信号量的过程中，其他任务触发了熔断器
+      // Check the circuit state again before waiting for the semaphore.
+      // Another task may have triggered the circuit breaker while this task was queued.
       if (circuitOpen) return;
 
-      // 获取信号量许可，如果并发数已满则等待其他任务完成
+      // Acquire a semaphore permit, or wait for another task to finish if concurrency is full.
       await acquire();
       try {
         if (circuitOpen) return;
@@ -314,118 +320,118 @@ export async function concurrentProcess<T>(
         let status: ProcessStatus;
         let result: unknown;
         try {
-          // 调用用户提供的处理函数，解构返回值为 [状态, 结果]
+          // Call the user-provided processing function and destructure [status, result].
           [status, result] = await processFunc(item);
         } catch (e) {
-          // processFunc 抛出异常时，视为 fatal_error
-          // 捕获异常而不是让它传播，这样一个任务的失败不会中断整个批处理
-          console.error(`处理项目时发生异常: ${e}`);
-          // 提取异常类名（如 "TypeError"、"NetworkError"），便于调试
+          // Treat exceptions from processFunc as fatal_error.
+          // Catching them here keeps one task failure from interrupting the whole batch.
+          console.error(`Exception while processing item: ${e}`);
+          // Extract the exception class name, such as "TypeError" or "NetworkError", for debugging.
           const name = e instanceof Error ? e.constructor.name : "Error";
           status = "fatal_error";
-          result = `异常: ${name}: ${e}`;
+          result = `Exception: ${name}: ${e}`;
         }
 
-        // 更新统计数据
-        // 为什么这里不需要锁？因为 JS 是单线程事件循环模型，
-        // 在两个 await 之间的同步代码不会被其他任务打断。
-        // 下面的 push 和 ++ 操作都是同步的，所以不存在并发修改问题。
+        // Update statistics.
+        // No lock is needed here because JavaScript uses a single-threaded event loop.
+        // Synchronous code between two await points cannot be interrupted by another task.
+        // The push and ++ operations below are synchronous, so concurrent mutation is not an issue.
         stats.items.push({
           status,
           item: String(item),
-          // 成功/跳过时保留原始结果；失败时统一包装为 { error: string } 格式
+          // Keep the raw result for success or skipped tasks; wrap failures as { error: string }.
           result: status === "success" || status === "skipped" ? result : { error: String(result) },
         });
 
-        // ---- 逐任务日志：成功/失败/跳过都记录 ----
-        // 生成简洁的任务标签（文件名、截断字符串、字典 key 列表等）
+        // ---- Per-task logs: record success, failure, and skipped tasks. ----
+        // Build a concise task label, such as a filename, truncated string, or object key list.
         const itemLabel = formatItemLabel(item);
-        const idx = stats.success + stats.failed + stats.skipped; // 即将 +1
+        const idx = stats.success + stats.failed + stats.skipped; // About to add 1.
         if (status === "success") {
-          console.info(`✓ [${idx + 1}/${total}] ${itemLabel} 成功`);
+          console.info(`✓ [${idx + 1}/${total}] ${itemLabel} succeeded`);
         } else if (status === "skipped") {
-          // 跳过时尝试提取原因（ConcurrentAction 会在 result 中附带 reason 字段）
+          // Try to extract the reason for skipped tasks. ConcurrentAction includes a reason field in result.
           let reason = "";
           if (result !== null && typeof result === "object" && !Array.isArray(result)) {
             reason = String((result as Record<string, unknown>)["reason"] ?? "");
           }
-          console.info(`⏭ [${idx + 1}/${total}] ${itemLabel} 跳过${reason ? ` (${reason})` : ""}`);
+          console.info(`⏭ [${idx + 1}/${total}] ${itemLabel} skipped${reason ? ` (${reason})` : ""}`);
         } else {
-          // retriable_error 或 fatal_error
+          // retriable_error or fatal_error
           let errorBrief = "";
           if (result !== null && typeof result === "object" && !Array.isArray(result)) {
             errorBrief = String((result as Record<string, unknown>)["error"] ?? "");
           } else if (typeof result === "string") {
             errorBrief = result;
           }
-          // 截断过长的错误信息，避免日志刷屏
+          // Truncate overly long errors to avoid noisy logs.
           if (errorBrief.length > 150) errorBrief = errorBrief.slice(0, 150) + "...";
-          console.error(`✗ [${idx + 1}/${total}] ${itemLabel} 失败: ${errorBrief}`);
+          console.error(`✗ [${idx + 1}/${total}] ${itemLabel} failed: ${errorBrief}`);
         }
 
-        // 根据状态更新对应的计数器，并通知熔断器
+        // Update the matching counter based on status and notify the circuit breaker.
         if (status === "success") {
           stats.success++;
-          recordSuccess();  // 成功 → 重置连续失败计数
+          recordSuccess();  // Success resets the consecutive failure count.
         } else if (status === "skipped") {
           stats.skipped++;
-          // 跳过的任务不影响熔断器计数（跳过不算失败）
+          // Skipped tasks do not affect the circuit breaker because they are not failures.
         } else {
-          // retriable_error 或 fatal_error
+          // retriable_error or fatal_error
           stats.failed++;
           if (recordFailure()) {
-            // recordFailure() 返回 true 表示刚触发熔断
-            console.error(`熔断器触发！连续失败 ${circuitBreakerThreshold} 次`);
+            // recordFailure() returns true when it just triggered the circuit breaker.
+            console.error(`Circuit breaker triggered after ${circuitBreakerThreshold} consecutive failures`);
             stats.circuitBreakerTriggered = true;
           }
         }
 
-        // 进度输出（单行覆写模式）
-        // \r 是回车符（carriage return），将光标移回行首但不换行，
-        // 下次 write 会覆盖当前行的内容，从而实现"原地更新"的进度显示效果。
-        // 末尾的两个空格用于覆盖上一次输出可能更长的残留字符。
-        // 示例输出：\r处理进度: 42/100 (42.0%) [success]
+        // Progress output using single-line overwrite mode.
+        // \r is carriage return: it moves the cursor back to the line start without adding a newline.
+        // The next write overwrites the current line, producing an in-place progress display.
+        // The two trailing spaces cover any leftover characters from a longer previous output.
+        // Example output: \rProcessing progress: 42/100 (42.0%) [success]
         const done = stats.success + stats.failed + stats.skipped;
-        const pct = ((done / total) * 100).toFixed(1);  // toFixed(1) 保留一位小数
+        const pct = ((done / total) * 100).toFixed(1);  // toFixed(1) keeps one decimal place.
         process.stdout.write(`\r${progressDesc}: ${done}/${total} (${pct}%) [${status}]  `);
-        // 所有任务完成后输出换行符，防止后续 console 输出粘在进度行后面
+        // Print a newline after all tasks finish so later console output does not stick to the progress line.
         if (done === total) process.stdout.write("\n");
       } finally {
-        // finally 确保无论成功还是异常都会归还信号量许可
-        // 如果不归还，其他等待中的任务将永远无法获得许可，导致死锁
+        // finally ensures the semaphore permit is returned whether the task succeeds or throws.
+        // Without release(), waiting tasks could never acquire a permit, causing a deadlock.
         release();
       }
     })();
 
-    // 将任务的 Promise 加入数组，后续用 Promise.all 等待全部完成
+    // Add this task Promise so Promise.all can wait for all dispatched tasks later.
     promises.push(p);
   }
 
-  // 等待所有已派发的任务完成（包括熔断前已派发但尚未完成的任务）
+  // Wait for all dispatched tasks, including tasks dispatched before the circuit breaker opened.
   await Promise.all(promises);
 
-  // 输出最终统计摘要
+  // Output the final summary.
   console.info(
-    `批量处理完成 - 总数:${stats.total}, 成功:${stats.success}, 失败:${stats.failed}, 跳过:${stats.skipped}`,
+    `Batch processing complete - total:${stats.total}, succeeded:${stats.success}, failed:${stats.failed}, skipped:${stats.skipped}`,
   );
   if (stats.circuitBreakerTriggered) {
-    console.warn("熔断器已触发，部分任务未执行");
+    console.warn("Circuit breaker was triggered; some tasks were not executed");
   }
 
   return stats;
 }
 
 // ============================================================
-// 工具函数
+// Utility functions
 // ============================================================
 
 /**
- * 异步等待指定秒数
+ * Wait asynchronously for the specified number of seconds.
  *
- * setTimeout 接受毫秒数，所以需要 seconds * 1000 转换。
- * 包装成 Promise 是为了支持 await sleep(0.5) 的写法。
+ * setTimeout accepts milliseconds, so seconds must be converted with seconds * 1000.
+ * Wrapping it in a Promise allows await sleep(0.5).
  *
- * @param seconds 等待的秒数（支持小数，如 0.5 表示 500ms）
+ * @param seconds Number of seconds to wait. Decimals are supported, such as 0.5 for 500ms.
  */
 function sleep(seconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
