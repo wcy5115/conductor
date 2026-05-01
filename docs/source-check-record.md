@@ -24,6 +24,7 @@ Date started: 2026-04-23
 | `src/workflow_engine.ts` | Checked | 2026-04-23 | Start-node and action-name logging bugs fixed; tracked Chinese text translated to English. |
 | `src/index.ts` | Checked | 2026-04-27 | Package entry exports fixed; no Chinese text found. |
 | `src/mock_llm.ts` | Checked | 2026-04-28 | Mock config validation bug fixed; tracked Chinese comments, examples, error messages, and logs translated to English. |
+| `src/cli/clean.ts` | Checked | 2026-05-01 | Cleanup target path containment bug fixed; tracked Chinese documentation, comments, and console text translated to English. |
 | `src/core/workflow_runner.ts` | Checked | 2026-04-23 | Related start-node bug fixed; tracked Chinese text translated to English. |
 | `src/core/logging.ts` | Checked | 2026-04-28 | No confirmed behavior bug found; tracked Chinese documentation, comments, examples, and runtime log messages translated to English. |
 | `src/validators/simple_json_validator.ts` | Checked | 2026-04-28 | Invalid non-object preview bug fixed; tracked explanatory text and runtime messages translated to English while preserving schema field names. |
@@ -84,6 +85,10 @@ Record bugs here immediately after checking each file.
 ### `src/mock_llm.ts`
 
 - Fixed on 2026-04-28: mock model configs can now leave `api_url` empty. `src/model_caller.ts` skips the real-provider `api_url` requirement for configs detected by `isMockModel()`, so the documented `models.mock.yaml` entries route to `mockLlmCall()` before any real API endpoint is required.
+
+### `src/cli/clean.ts`
+
+- Fixed on 2026-05-01: `cleanDirectory()` now resolves `baseDir` and each cleanup target, then rejects targets that resolve to `baseDir` itself or outside it. This prevents caller-provided targets such as `..` from deleting a parent directory when `dryRun` is false.
 
 ### `src/workflow_loader.ts`
 
@@ -206,6 +211,10 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 ### `src/mock_llm.ts`
 
 - Translated on 2026-04-28: module documentation, setup examples, type/interface comments, section headings, inline comments, thrown error messages, prompt-mismatch labels, and the mock-hit log message were translated to English.
+
+### `src/cli/clean.ts`
+
+- Translated on 2026-05-01: module documentation, section headings, inline comments, interface documentation, helper documentation, examples, and user-facing console messages.
 
 ### `src/workflow_loader.ts`
 
@@ -334,6 +343,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/mock_llm.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/mock_llm.ts`.
 - Follow-up needed: none for the tracked `src/mock_llm.ts` work.
+
+### 2026-05-01 - `src/cli/clean.ts`
+
+- Checked cleanup option handling, target-directory deletion, results-file deletion, logs-directory deletion, size calculation, kept-file reporting, package exports, and current cleanup call sites.
+- Bug details: see `Bugs Found` > `src/cli/clean.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/cli/clean.ts`.
+- Follow-up needed: none for the tracked `src/cli/clean.ts` work.
 
 ### 2026-04-23 - `src/workflow_loader.ts`
 
@@ -605,3 +621,10 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]" src/validators/base.ts` found Chinese documentation, config-example comments, and example error text during the focused check.
 - A focused code read of `src/validators/base.ts`, the validator subclasses, the validator registry, and the validator action call site found no confirmed behavior bug in the abstract validator contract during this pass.
 - `rg -n "[\p{Han}]" src/validators/base.ts` returned no matches after translating the tracked validator base text to English.
+- `rg -n "[\p{Han}]" src/cli/clean.ts` found Chinese documentation, comments, examples, and console output text during the focused check.
+- A focused code read of `src/cli/clean.ts`, its package export in `src/index.ts`, and cleanup call sites confirmed that cleanup targets are joined to `baseDir` without a containment check.
+- `npm.cmd run typecheck` passed after fixing the `src/cli/clean.ts` cleanup target containment bug.
+- `node_modules\.bin\tsx.cmd -e "..."` confirmed `cleanDirectory(".tmp-clean-check/project", { targets: [".."], dryRun: true })` now rejects the unsafe target before deletion. The first sandboxed `tsx` run failed with `spawn EPERM`, so it was rerun outside the sandbox.
+- `rg -n "[\p{Han}]" src/cli/clean.ts` returned no matches after translating the tracked cleanup utility text to English.
+- `npm.cmd run typecheck` passed after translating the tracked `src/cli/clean.ts` text to English.
+- `node_modules\.bin\tsx.cmd -e "..."` confirmed the translated cleanup utility still rejects the unsafe `..` target before deletion.
