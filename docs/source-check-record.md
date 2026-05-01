@@ -28,6 +28,7 @@ Date started: 2026-04-23
 | `src/core/logging.ts` | Checked | 2026-04-28 | No confirmed behavior bug found; tracked Chinese documentation, comments, examples, and runtime log messages translated to English. |
 | `src/validators/simple_json_validator.ts` | Checked | 2026-04-28 | Invalid non-object preview bug fixed; tracked explanatory text and runtime messages translated to English while preserving schema field names. |
 | `src/validators/pdf_page_validator.ts` | Checked | 2026-04-30 | Invalid value preview bug fixed; tracked text translated to English while preserving contract terms. |
+| `src/validators/index.ts` | Checked | 2026-05-01 | No confirmed behavior bug found; tracked Chinese documentation, comments, and unknown-validator error text translated to English while preserving contract terms. |
 | `src/utils.ts` | Checked | 2026-04-27 | Image preprocessing now fails loudly for requested local images that cannot be included; tracked Chinese text translated to English. |
 | `src/workflow_actions/utils.ts` | Checked | 2026-04-27 | Zero-cost metadata now includes the project currency field; tracked Chinese text translated to English. |
 | `src/workflow_actions/llm_actions.ts` | Checked | 2026-04-23 | Multimodal prompt interpolation bug fixed; tracked Chinese text translated to English. |
@@ -118,6 +119,10 @@ Record bugs here immediately after checking each file.
 ### `src/validators/pdf_page_validator.ts`
 
 - Fixed on 2026-04-30: `PDFPageValidator.validate()` now formats invalid values with a safe preview helper before throwing the intended validation error. The helper handles cases where `JSON.stringify()` returns `undefined` or throws, so inputs such as `undefined`, functions, symbols, bigint values, and bigint-containing objects no longer crash the error-reporting path with `TypeError`.
+
+### `src/validators/index.ts`
+
+- No confirmed behavior bug found during the focused check on 2026-05-01.
 
 ### `src/workflow_actions/llm_actions.ts`
 
@@ -230,6 +235,11 @@ Record Chinese comments, strings, prompts, and user-facing text here before tran
 
 - Translated on 2026-04-30: module documentation, class documentation, examples, inline comments, thrown error messages, error-report labels, warning messages, and debug success messages.
 - The JSON schema field names `页码` and `内容`, the paragraph-key prefix `段落`, and the empty-page marker `kong` were intentionally preserved because they are part of this validator's data contract.
+
+### `src/validators/index.ts`
+
+- Translated on 2026-05-01: module documentation, registry comments, factory-function comments, usage examples, and the unknown-validator error message.
+- The validator names `simple_json` and `pdf_page`, schema field names `页码` and `内容`, and paragraph-key prefix `段落` were intentionally preserved because they are part of the validator contract.
 
 ### `src/workflow_actions/llm_actions.ts`
 
@@ -385,6 +395,13 @@ Add one entry per checked file. Each entry should record what was checked and po
 - Bug details: see `Bugs Found` > `src/validators/pdf_page_validator.ts`.
 - Chinese text details: see `Chinese Text Found` > `src/validators/pdf_page_validator.ts`.
 - Follow-up needed: none for the tracked `src/validators/pdf_page_validator.ts` work.
+
+### 2026-05-01 - `src/validators/index.ts`
+
+- Checked the validator registry, `getValidator()` factory behavior, exported validator API, and the validator call site in `src/workflow_actions/llm_actions.ts`.
+- Bug details: see `Bugs Found` > `src/validators/index.ts`.
+- Chinese text details: see `Chinese Text Found` > `src/validators/index.ts`.
+- Follow-up needed: none for the tracked `src/validators/index.ts` work.
 
 ### 2026-04-23 - `src/workflow_actions/llm_actions.ts`
 
@@ -565,3 +582,7 @@ Add one entry per checked file. Each entry should record what was checked and po
 - `rg -n "[\p{Han}]" src/validators/pdf_page_validator.ts` now returns only the preserved contract terms `页码`, `内容`, and `段落` after the tracked English translation.
 - `npm.cmd run typecheck` passed after translating the tracked `src/validators/pdf_page_validator.ts` text to English.
 - `node_modules\.bin\tsx.cmd -e "..."` confirmed the translated validator still throws English validation errors for invalid values and still accepts valid `段落1` and `kong` cases. The first sandboxed `tsx` run failed with `spawn EPERM`, so it was rerun outside the sandbox.
+- `rg -n "[\p{Han}]" src/validators/index.ts` found Chinese documentation, comments, examples, and the unknown-validator error message during the focused check.
+- A focused code read of `src/validators/index.ts` and the validator call site in `src/workflow_actions/llm_actions.ts` found no confirmed behavior bug in the validator registry or `getValidator()` factory during this pass.
+- `rg -n "[\p{Han}]" src/validators/index.ts` now returns only the preserved contract terms `页码`, `内容`, and `段落` after the tracked English translation.
+- `npm.cmd run typecheck` passed after translating the tracked `src/validators/index.ts` text to English.

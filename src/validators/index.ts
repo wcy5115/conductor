@@ -1,45 +1,50 @@
 /**
- * 验证器模块入口
+ * Validator module entry point.
  *
- * 提供验证器注册表（VALIDATORS）和工厂函数（getValidator）。
+ * Provides the validator registry (VALIDATORS) and the factory function
+ * (getValidator).
  *
- * 工作原理：
- *   1. 所有验证器类在 VALIDATORS 注册表中注册（名称 → 类的映射）
- *   2. YAML 工作流配置中通过名称引用验证器：validator: "simple_json"
- *   3. 运行时 getValidator("simple_json") 查表 → new SimpleJSONValidator(config)
+ * How it works:
+ *   1. All validator classes are registered in VALIDATORS (name -> class).
+ *   2. YAML workflow configs reference validators by name: validator: "simple_json".
+ *   3. At runtime, getValidator("simple_json") looks up the class and returns
+ *      new SimpleJSONValidator(config).
  *
- * 添加新验证器的步骤：
- *   1. 创建新文件，继承 BaseValidator，实现 name 属性和 validate 方法
- *   2. 在本文件中 import 新验证器类
- *   3. 在 VALIDATORS 中添加一行注册：my_validator: MyValidator
+ * To add a new validator:
+ *   1. Create a new file, extend BaseValidator, and implement name and validate().
+ *   2. Import the new validator class in this file.
+ *   3. Add one registration line to VALIDATORS: my_validator: MyValidator.
  */
 
-// BaseValidator 是所有验证器的抽象基类，定义了 validate() 和 name 两个抽象成员
-// 导入后在本文件底部重新导出，方便外部模块统一从 validators/index.ts 导入
+// BaseValidator is the abstract base class for all validators. It defines
+// validate() and name, and is re-exported at the bottom of this file.
 import { BaseValidator } from "./base.js";
-// SimpleJSONValidator 只校验基础字段存在性（"页码"和"内容"），不验证内容结构
+// SimpleJSONValidator only checks that the basic `页码` and `内容` fields exist.
+// It does not validate the nested content structure.
 import { SimpleJSONValidator } from "./simple_json_validator.js";
-// PDFPageValidator 在 SimpleJSONValidator 的基础上，额外验证段落编号连续性（"段落1"→"段落2"→...）
+// PDFPageValidator builds on SimpleJSONValidator and also verifies paragraph key
+// continuity (`段落1`, `段落2`, ...).
 import { PDFPageValidator } from "./pdf_page_validator.js";
 
 // ============================================================
-// 验证器注册表
+// Validator Registry
 // ============================================================
 
 /**
- * 验证器注册表：名称 → 验证器类 的映射
+ * Validator registry: maps validator names to validator classes.
  *
- * 类型说明：
+ * Type explanation:
  *   Record<string, new (config: Record<string, unknown>) => BaseValidator>
- *   即 { [名称: string]: 构造函数 }
+ *   means { [name: string]: constructor }.
  *
- *   其中 `new (config: ...) => BaseValidator` 是 TS 的"构造签名"（construct signature），
- *   表示"可以用 new 调用、接受 config 参数、返回 BaseValidator 实例的类"。
- *   这样 VALIDATORS["simple_json"] 拿到的就是类本身（不是实例），可以 new 它。
+ *   `new (config: ...) => BaseValidator` is a TypeScript construct signature.
+ *   It describes a class that can be called with `new`, accepts a config
+ *   argument, and returns a BaseValidator instance.
+ *   Therefore VALIDATORS["simple_json"] is the class itself, not an instance.
  *
- * 使用示例：
- *   const Cls = VALIDATORS["simple_json"];  // → SimpleJSONValidator 类
- *   const v = new Cls({ strict: true });    // → SimpleJSONValidator 实例
+ * Example:
+ *   const Cls = VALIDATORS["simple_json"];  // -> SimpleJSONValidator class
+ *   const v = new Cls({ strict: true });    // -> SimpleJSONValidator instance
  */
 export const VALIDATORS: Record<string, new (config: Record<string, unknown>) => BaseValidator> = {
   simple_json: SimpleJSONValidator,
@@ -47,53 +52,56 @@ export const VALIDATORS: Record<string, new (config: Record<string, unknown>) =>
 };
 
 // ============================================================
-// 工厂函数
+// Factory Function
 // ============================================================
 
 /**
- * 根据名称获取验证器实例
+ * Create a validator instance by name.
  *
- * 这是外部调用验证器的唯一入口，封装了"查表 + 实例化"的过程。
- * 调用方无需知道具体的验证器类，只需传入 YAML 中配置的名称字符串。
+ * This is the single external entry point for validator creation. It wraps
+ * lookup and instantiation so callers only need the validator name from YAML,
+ * not the concrete validator class.
  *
- * 使用示例：
+ * Example:
  *   const v = getValidator("simple_json", { strict: true });
- *   v.validate(parsedData);  // 验证通过返回 true，失败抛出 Error
+ *   v.validate(parsedData);  // returns true or throws Error
  *
- * @param name   验证器名称（在 YAML 配置中指定，如 "simple_json"）
- * @param config 验证器配置（可选），透传给验证器构造函数
- * @returns      BaseValidator 实例
- * @throws Error 验证器名称不存在时抛出，错误信息包含所有可用的验证器名称
+ * @param name   Validator name from YAML, such as "simple_json".
+ * @param config Optional validator config passed through to the constructor.
+ * @returns      BaseValidator instance.
+ * @throws Error If the validator name is unknown. The error lists all available
+ *               validator names.
  */
 export function getValidator(
   name: string,
   config: Record<string, unknown> = {}
 ): BaseValidator {
-  // 从注册表中查找对应的类
+  // Look up the matching class in the registry.
   const ValidatorClass = VALIDATORS[name];
 
-  // 名称不在注册表中 → 给出友好的错误提示，列出所有可用选项
+  // If the name is not registered, report all available options.
   if (!ValidatorClass) {
     const available = Object.keys(VALIDATORS).sort();
     throw new Error(
-      `❌ 未知的验证器: '${name}'\n\n` +
-        `【可用验证器】\n  ${available.join(", ")}\n\n` +
-        `【使用方法】\n  在 YAML 配置中指定：\n` +
+      `Unknown validator: '${name}'\n\n` +
+        `Available validators:\n  ${available.join(", ")}\n\n` +
+        `Usage:\n  Specify it in YAML config:\n` +
         `  validator: "${available[0] ?? "validator_name"}"`
     );
   }
 
-  // 实例化并返回
-  // 这就是"工厂模式"的核心价值：调用方只需传一个名称字符串，工厂负责查表并 new 出对应的对象。
-  // 如果没有这个工厂函数，调用方就得自己 import 每个具体的验证器类，然后写 if/switch 判断该用哪个——
-  // 每新增一个验证器，所有调用方的代码都要改。
-  // 有了工厂函数后，新增验证器只需在 VALIDATORS 注册表里加一行，调用方代码完全不用动。
+  // Instantiate and return the validator.
+  // This is the value of the factory pattern: callers pass a name string, while
+  // the factory handles lookup and object creation.
+  // Without this factory, every caller would need to import each concrete
+  // validator class and choose one with if/switch logic.
+  // With the factory, adding a validator only requires one line in VALIDATORS.
   return new ValidatorClass(config);
 }
 
-// 重新导出，方便外部模块统一从 "validators/index.ts" 导入
-// 例如：import { BaseValidator, SimpleJSONValidator } from "./validators/index.js"
-// 而不需要深入到 validators/base.js 或 validators/simple_json_validator.js
+// Re-export these classes so external modules can import from validators/index.ts
+// instead of reaching into validators/base.js or validators/simple_json_validator.js.
+// Example: import { BaseValidator, SimpleJSONValidator } from "./validators/index.js"
 export { BaseValidator };
 export { SimpleJSONValidator };
 export { PDFPageValidator };
