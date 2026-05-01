@@ -1,326 +1,338 @@
 /**
- * PDF 页面 JSON 验证器
+ * PDF page JSON validator
  *
- * 验证从 PDF 页面提取的 JSON 数据结构是否符合规范。
+ * Validates whether JSON data extracted from a PDF page matches the expected structure.
  *
- * 适用场景：
- * - 需要按自然段提取文字的工作流
- * - 需要验证段落编号连续性
- * - 严格的数据质量要求
+ * Suitable for:
+ * - Workflows that extract text by natural paragraph
+ * - Cases that need paragraph-number continuity checks
+ * - Strict data-quality requirements
  *
- * 验证规则：
- * 1. 数据必须是字典类型
- * 2. 必须包含"页码"和"内容"字段
- * 3. "页码"必须是字符串类型
- * 4. "内容"要么是字符串"kong"（表示空页面），要么是段落对象
- * 5. 段落对象的键名必须是"段落1"、"段落2"、"段落3"...（连续编号）
- * 6. 编号必须从1开始
- * 7. 编号不能跳号
+ * Validation rules:
+ * 1. Data must be an object
+ * 2. Data must contain the "页码" and "内容" fields
+ * 3. "页码" must be a string
+ * 4. "内容" must be either the string "kong" (empty page) or a paragraph object
+ * 5. Paragraph-object keys must be "段落1", "段落2", "段落3"... with continuous numbering
+ * 6. Numbering must start from 1
+ * 7. Numbers cannot be skipped
  *
- * 设计理念：
- * - 分层验证：从外到内逐层检查
- * - 详细错误：每个错误都包含上下文信息
- * - 防御性：处理各种边界情况
+ * Design:
+ * - Layered validation: check from the outer structure inward
+ * - Detailed errors: every error includes context
+ * - Defensive handling for edge cases
  */
 
-// BaseValidator 是所有验证器的抽象基类，提供 validate() 和 name 两个抽象成员
+// BaseValidator is the abstract base class for all validators.
 import { BaseValidator } from "./base.js";
 
+function formatValuePreview(
+  value: unknown,
+  maxLength = 200,
+  space?: number
+): string {
+  let repr: string;
+
+  try {
+    const json = JSON.stringify(value, null, space);
+    repr = json === undefined ? String(value) : json;
+  } catch {
+    repr = String(value);
+  }
+
+  return repr.length > maxLength ? repr.slice(0, maxLength) + "..." : repr;
+}
+
 /**
- * PDF 页面 JSON 验证器
+ * PDF page JSON validator
  *
- * 验证从 PDF 页面提取的结构化数据，确保段落编号的连续性。
+ * Validates structured data extracted from a PDF page and ensures paragraph numbers are continuous.
  *
- * 验证层级：
- * - 第1层：最外层结构验证（数据类型、必填字段）
- * - 第2层：内容类型验证（"kong" 或对象）
- * - 第3层：段落编号连续性验证
+ * Validation layers:
+ * - Layer 1: outer structure validation (data type and required fields)
+ * - Layer 2: content type validation ("kong" or object)
+ * - Layer 3: paragraph-number continuity validation
  *
- * 合法数据示例：
- *   // 正常页面（多段落）
- *   { "页码": "1", "内容": { "段落1": "第一段内容", "段落2": "第二段内容" } }
+ * Valid examples:
+ *   // Normal page with multiple paragraphs
+ *   { "页码": "1", "内容": { "段落1": "First paragraph", "段落2": "Second paragraph" } }
  *
- *   // 正常页面（单段落）
- *   { "页码": "5", "内容": { "段落1": "唯一的段落" } }
+ *   // Normal page with one paragraph
+ *   { "页码": "5", "内容": { "段落1": "Only paragraph" } }
  *
- *   // 罗马数字页码
- *   { "页码": "iii", "内容": { "段落1": "前言内容" } }
+ *   // Roman-numeral page number
+ *   { "页码": "iii", "内容": { "段落1": "Preface content" } }
  *
- *   // 空页面
+ *   // Empty page
  *   { "页码": "kong", "内容": "kong" }
  *
- * 非法数据示例：
- *   { "页码": "1" }                                       // 缺少"内容"
- *   { "页码": "1", "内容": { "段落1": "...", "段落3": "..." } }  // 段落跳号
- *   { "页码": "1", "内容": { "自然段1": "..." } }         // 键名格式错误
+ * Invalid examples:
+ *   { "页码": "1" }                                       // Missing "内容"
+ *   { "页码": "1", "内容": { "段落1": "...", "段落3": "..." } }  // Skipped paragraph number
+ *   { "页码": "1", "内容": { "paragraph1": "..." } }     // Wrong key format
  */
 export class PDFPageValidator extends BaseValidator {
   /**
-   * 验证器名称，用于在 YAML 配置中引用
+   * Validator name used in YAML configuration.
    *
-   * YAML 中写 validator: "pdf_page" 就会匹配到这个验证器
+   * `validator: "pdf_page"` in YAML matches this validator.
    */
   get name(): string {
     return "pdf_page";
   }
 
   /**
-   * 验证 PDF 页面 JSON 结构
+   * Validate a PDF page JSON structure.
    *
-   * 验证流程：
-   * 1. 验证最外层结构（必须是对象，包含必填字段）
-   * 2. 验证内容类型（"kong" 或对象）
-   * 3. 如果是对象，验证段落编号连续性
+   * Flow:
+   * 1. Validate the outer structure (must be an object with required fields)
+   * 2. Validate the content type ("kong" or object)
+   * 3. If content is an object, validate paragraph-number continuity
    *
-   * @param data 解析后的 JSON 数据
-   * @returns 验证通过返回 true
-   * @throws Error 验证失败，包含详细错误信息
+   * @param data Parsed JSON data
+   * @returns true when validation passes
+   * @throws Error when validation fails, with detailed context
    */
   validate(data: unknown): boolean {
-    // 第1层：验证最外层结构（类型、必填字段、字段类型）
+    // Layer 1: validate the outer structure, required fields, and field types.
     this._validateStructure(data);
 
-    // 经过 _validateStructure 后，data 一定是包含"页码"和"内容"的对象
+    // After _validateStructure, data is an object with "页码" and "内容".
     const obj = data as Record<string, unknown>;
     const content = obj["内容"];
 
-    // 第2层：如果内容是 "kong"，说明是空页面，直接通过
+    // Layer 2: "kong" means an empty page and passes directly.
     if (content === "kong") {
-      console.debug(`✓ PDF 页面验证通过（空页面，页码: ${obj["页码"]}）`);
+      console.debug(`✓ PDF page validation passed (empty page, page: ${obj["页码"]})`);
       return true;
     }
 
-    // 第3层：验证段落结构（键名格式、编号连续性）
+    // Layer 3: validate paragraph key format and number continuity.
     this._validateParagraphs(content, obj);
 
-    // 统计段落数，输出调试日志
+    // Count paragraphs for the debug log.
     const paragraphCount = Object.keys(
       content as Record<string, unknown>
     ).length;
     console.debug(
-      `✓ PDF 页面验证通过 (页码: ${obj["页码"]}, ${paragraphCount} 个段落)`
+      `✓ PDF page validation passed (page: ${obj["页码"]}, ${paragraphCount} paragraph(s))`
     );
     return true;
   }
 
   /**
-   * 验证最外层结构（私有方法）
+   * Validate the outer structure.
    *
-   * 检查项：
-   * 1. 数据类型必须是对象（不能是数组、null、基本类型）
-   * 2. 必须包含"页码"字段
-   * 3. 必须包含"内容"字段
-   * 4. "页码"字段必须是字符串类型
+   * Checks:
+   * 1. Data must be an object (not an array, null, or primitive)
+   * 2. The "页码" field is required
+   * 3. The "内容" field is required
+   * 4. The "页码" field must be a string
    *
-   * @param data 要验证的数据
-   * @throws Error 结构不符合要求
+   * @param data Data to validate
+   * @throws Error when the structure is invalid
    */
   private _validateStructure(data: unknown): void {
-    // 检查1：数据类型必须是对象
-    // typeof null === "object"，所以要额外排除 null
-    // Array.isArray 排除数组（数组的 typeof 也是 "object"）
+    // Check 1: data must be an object.
+    // typeof null === "object", so null must be excluded explicitly.
+    // Arrays also have typeof "object", so exclude them with Array.isArray.
     if (typeof data !== "object" || data === null || Array.isArray(data)) {
-      // 获取实际类型名称，区分 null 和 array
+      // Get a clearer actual type name for null and arrays.
       const actualType = Array.isArray(data)
         ? "array"
         : data === null
           ? "null"
           : typeof data;
-      const repr = JSON.stringify(data);
-      // 截断过长的数据，避免错误信息过于冗长
-      const truncated = repr.length > 200 ? repr.slice(0, 200) + "..." : repr;
+      // Truncate long data so error messages stay readable.
+      const truncated = formatValuePreview(data);
       throw new Error(
-        `❌ 数据必须是对象类型\n` +
+        `❌ Data must be an object\n` +
           `\n` +
-          `【实际类型】\n` +
+          `[Actual type]\n` +
           `  ${actualType}\n` +
           `\n` +
-          `【实际数据】\n` +
+          `[Actual data]\n` +
           `  ${truncated}\n` +
           `\n` +
-          `【期望格式】\n` +
+          `[Expected format]\n` +
           `  {"页码": "1", "内容": {"段落1": "..."}}\n` +
           `\n` +
-          `【修复建议】\n` +
-          `  确保返回的是 JSON 对象（使用花括号 {}）`
+          `[Fix suggestion]\n` +
+          `  Make sure the LLM returns a JSON object with braces {}`
       );
     }
 
     const obj = data as Record<string, unknown>;
 
-    // 检查2：必须包含"页码"字段
+    // Check 2: the "页码" field is required.
     if (!("页码" in obj)) {
       throw new Error(
-        `❌ 缺少必填字段: 页码\n` +
+        `❌ Missing required field: 页码\n` +
           `\n` +
-          `【实际字段】\n` +
+          `[Actual fields]\n` +
           `  ${JSON.stringify(Object.keys(obj))}\n` +
           `\n` +
-          `【实际数据】\n` +
-          `${JSON.stringify(obj, null, 2)}\n` +
+          `[Actual data]\n` +
+          `${formatValuePreview(obj, Number.POSITIVE_INFINITY, 2)}\n` +
           `\n` +
-          `【期望格式】\n` +
+          `[Expected format]\n` +
           `  {"页码": "1", "内容": {...}}\n` +
           `\n` +
-          `【修复建议】\n` +
-          `  添加 "页码" 字段`
+          `[Fix suggestion]\n` +
+          `  Add the "页码" field`
       );
     }
 
-    // 检查3：必须包含"内容"字段
+    // Check 3: the "内容" field is required.
     if (!("内容" in obj)) {
       throw new Error(
-        `❌ 缺少必填字段: 内容\n` +
+        `❌ Missing required field: 内容\n` +
           `\n` +
-          `【实际字段】\n` +
+          `[Actual fields]\n` +
           `  ${JSON.stringify(Object.keys(obj))}\n` +
           `\n` +
-          `【实际数据】\n` +
-          `${JSON.stringify(obj, null, 2)}\n` +
+          `[Actual data]\n` +
+          `${formatValuePreview(obj, Number.POSITIVE_INFINITY, 2)}\n` +
           `\n` +
-          `【期望格式】\n` +
+          `[Expected format]\n` +
           `  {"页码": "1", "内容": {"段落1": "..."}}\n` +
-          `  或（空页面）：{"页码": "kong", "内容": "kong"}\n` +
+          `  Or, for an empty page: {"页码": "kong", "内容": "kong"}\n` +
           `\n` +
-          `【修复建议】\n` +
-          `  添加 "内容" 字段`
+          `[Fix suggestion]\n` +
+          `  Add the "内容" field`
       );
     }
 
-    // 检查4："页码"必须是字符串类型
-    // 页码用字符串是因为可能是罗马数字（如 "iii"）或特殊标记（如 "kong"）
+    // Check 4: "页码" must be a string.
+    // Page numbers use strings because they may be Roman numerals such as "iii" or special markers such as "kong".
     if (typeof obj["页码"] !== "string") {
       throw new Error(
-        `❌ 字段'页码'必须是字符串类型\n` +
+        `❌ Field "页码" must be a string\n` +
           `\n` +
-          `【实际类型】\n` +
+          `[Actual type]\n` +
           `  ${typeof obj["页码"]}\n` +
           `\n` +
-          `【实际值】\n` +
-          `  ${JSON.stringify(obj["页码"])}\n` +
+          `[Actual value]\n` +
+          `  ${formatValuePreview(obj["页码"])}\n` +
           `\n` +
-          `【修复建议】\n` +
-          `  将页码改为字符串，例如 "1" 而不是 1`
+          `[Fix suggestion]\n` +
+          `  Change the page number to a string, such as "1" instead of 1`
       );
     }
   }
 
   /**
-   * 验证段落结构（私有方法）
+   * Validate the paragraph structure.
    *
-   * 检查项：
-   * 1. 内容必须是对象类型（非 "kong" 的情况下）
-   * 2. 段落键名必须是 "段落1", "段落2", "段落3" ...
-   * 3. 编号必须从 1 开始
-   * 4. 编号必须连续（不能跳号）
+   * Checks:
+   * 1. Content must be an object unless it is "kong"
+   * 2. Paragraph keys must be "段落1", "段落2", "段落3", ...
+   * 3. Numbering must start from 1
+   * 4. Numbering must be continuous, with no skipped numbers
    *
-   * @param content  内容字段（段落对象）
-   * @param fullData 完整的数据（用于错误报告时展示上下文）
-   * @throws Error 段落结构不符合要求
+   * @param content The "内容" field, usually a paragraph object
+   * @param fullData Complete data, shown as context in error reports
+   * @throws Error when the paragraph structure is invalid
    */
   private _validateParagraphs(
     content: unknown,
     fullData: Record<string, unknown>
   ): void {
-    // 检查：内容必须是对象（不是 "kong" 时只能是 { "段落1": ..., "段落2": ... } 格式）
+    // When content is not "kong", it must be an object such as { "段落1": ..., "段落2": ... }.
     if (typeof content !== "object" || content === null || Array.isArray(content)) {
-      const repr = JSON.stringify(content);
-      const truncated = repr.length > 100 ? repr.slice(0, 100) + "..." : repr;
+      const truncated = formatValuePreview(content, 100);
       throw new Error(
-        `❌ 字段'内容'必须是字符串'kong'或对象\n` +
+        `❌ Field "内容" must be the string "kong" or an object\n` +
           `\n` +
-          `【实际类型】\n` +
+          `[Actual type]\n` +
           `  ${Array.isArray(content) ? "array" : content === null ? "null" : typeof content}\n` +
           `\n` +
-          `【实际值】\n` +
+          `[Actual value]\n` +
           `  ${truncated}\n` +
           `\n` +
-          `【允许的格式】\n` +
-          `  1. 空页面: "kong"\n` +
-          `  2. 有内容: {"段落1": "...", "段落2": "..."}\n` +
+          `[Allowed formats]\n` +
+          `  1. Empty page: "kong"\n` +
+          `  2. Page with content: {"段落1": "...", "段落2": "..."}\n` +
           `\n` +
-          `【完整数据】\n` +
-          `${JSON.stringify(fullData, null, 2)}`
+          `[Full data]\n` +
+          `${formatValuePreview(fullData, Number.POSITIVE_INFINITY, 2)}`
       );
     }
 
     const contentObj = content as Record<string, unknown>;
     const keys = Object.keys(contentObj);
 
-    // 处理空对象——空页面应该用 "kong" 而不是 {}，但不算致命错误，给个警告就行
+    // Empty pages should use "kong" instead of {}, but this is only a warning.
     if (keys.length === 0) {
       console.warn(
-        "⚠️ 内容为空对象\n" +
-          "   建议：空页面应使用字符串 'kong' 而不是空对象 {}"
+        "⚠️ Content is an empty object\n" +
+          "   Suggestion: empty pages should use the string 'kong' instead of {}"
       );
       return;
     }
 
-    // 逐个检查段落键名：期望 "段落1", "段落2", "段落3" ...
-    // index 从 0 开始遍历数组，但期望的段落编号从 1 开始，所以 expectedKey = `段落${index + 1}`
+    // Check paragraph keys one by one: expected keys are "段落1", "段落2", "段落3", ...
+    // The loop index starts at 0, but paragraph numbers start at 1.
     for (let index = 0; index < keys.length; index++) {
       const expectedKey = `段落${index + 1}`;
       const actualKey = keys[index]!;
 
       if (actualKey !== expectedKey) {
-        // 段落编号不匹配，构建详细的错误报告
+        // Build a detailed error report for mismatched paragraph numbers.
         const errorLines: string[] = [
-          "❌ 段落编号不连续或格式错误！",
+          "❌ Paragraph numbering is not continuous or has the wrong format.",
           "",
-          "【错误位置】",
-          `  第 ${index + 1} 个段落`,
+          "[Error location]",
+          `  Paragraph ${index + 1}`,
           "",
-          "【期望】",
-          `  键名: '${expectedKey}'`,
+          "[Expected]",
+          `  Key: '${expectedKey}'`,
           "",
-          "【实际】",
-          `  键名: '${actualKey}'`,
+          "[Actual]",
+          `  Key: '${actualKey}'`,
           "",
-          "【所有段落键】",
+          "[All paragraph keys]",
           `  ${JSON.stringify(keys)}`,
           "",
-          "【编号规则】",
-          "  1. 从'段落1'开始",
-          "  2. 依次递增：段落1 → 段落2 → 段落3 ...",
-          "  3. 不能跳号（如不能：段落1 → 段落3）",
-          "  4. 必须是阿拉伯数字",
-          "  5. 不能重复",
+          "[Numbering rules]",
+          "  1. Start from '段落1'",
+          "  2. Increase one by one: 段落1 -> 段落2 -> 段落3 ...",
+          "  3. Do not skip numbers, such as 段落1 -> 段落3",
+          "  4. Use Arabic numerals",
+          "  5. Do not duplicate numbers",
           "",
-          "【修复建议】",
+          "[Fix suggestion]",
         ];
 
-        // 根据具体的键名错误类型，给出更精准的修复建议
+        // Give a more precise suggestion based on the key-format error.
         if (actualKey.startsWith("段落")) {
-          // 键名以"段落"开头，说明格式对了但编号有问题
-          const numStr = actualKey.slice(2); // "段落" 是2个字符，取后面的数字部分
+          // The key starts with "段落", so the prefix is correct but the number is wrong.
+          const numStr = actualKey.slice(2);
           const num = parseInt(numStr, 10);
           if (!isNaN(num)) {
-            // 成功解析出数字
             if (num > index + 1) {
-              // 实际编号比期望的大 → 中间跳号了
-              errorLines.push(`  缺少了 '${expectedKey}'，请补充`);
+              errorLines.push(`  Missing '${expectedKey}', please add it`);
             } else if (num < index + 1) {
-              // 实际编号比期望的小 → 重复或顺序错误
-              errorLines.push(`  '${actualKey}' 重复或顺序错误`);
+              errorLines.push(`  '${actualKey}' is duplicated or out of order`);
             } else {
-              errorLines.push(`  检查段落编号是否正确`);
+              errorLines.push(`  Check whether the paragraph number is correct`);
             }
           } else {
-            // "段落" 后面跟的不是数字，比如 "段落一"、"段落abc"
             errorLines.push(
-              `  段落编号必须是数字，不能是 '${numStr}'`
+              `  The paragraph number must be numeric, not '${numStr}'`
             );
           }
         } else {
-          // 键名格式完全不对，比如 "自然段1"、"paragraph1"
           errorLines.push(
-            `  键名必须是 '段落N' 格式，不能是 '${actualKey}'`
+            `  The key must use the '段落N' format, not '${actualKey}'`
           );
         }
 
-        // 附上完整数据，方便调试
-        errorLines.push("", "【完整数据】");
-        errorLines.push(JSON.stringify(fullData, null, 2));
+        // Include full data for debugging.
+        errorLines.push("", "[Full data]");
+        errorLines.push(
+          formatValuePreview(fullData, Number.POSITIVE_INFINITY, 2)
+        );
 
         throw new Error(errorLines.join("\n"));
       }
