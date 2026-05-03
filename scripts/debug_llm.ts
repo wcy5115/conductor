@@ -20,7 +20,7 @@ import { callModel } from "../src/model_caller.js";
 // MODELS：要测试的模型简称列表，名称需与 models.yaml 中的 key 一致
 // 取消注释即可添加更多模型进行批量测试
 const MODELS: string[] = [
-  "gpt35",
+  "deepseek-v4-flash-nonthinking",
   // "kimi",
   // "qwen-max",
 ];

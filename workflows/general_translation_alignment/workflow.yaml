@@ -1,0 +1,109 @@
+project_name: "general_translation_alignment"
+name: "General Translation and Alignment Workflow"
+description: "Extract source text into chunks, translate and align each chunk into a requested target language, then merge the outputs."
+
+# User-provided values are passed in by run.ts:
+# - input_epub
+# - book_name
+# - source_language
+# - target_language
+
+paths:
+  original: "artifacts/original"
+  aligned: "artifacts/aligned"
+  results: "results"
+
+workflow_graph: "1 -> 2 -> 3 -> END"
+
+steps:
+  "1":
+    name: "Extract and split text"
+    type: "epub_extract"
+    input_key: "input_epub"
+    target_tokens: 1000
+    emergency_threshold: 1500
+    save_to_file:
+      output_dir: "{paths.original}"
+      filename_template: "chunk_{index:04d}.txt"
+
+  "2":
+    name: "Translate and align chunks"
+    type: "concurrent"
+    items_key: "1_response"
+    max_concurrent: 3
+    task_dispatch_delay: 1.0
+    fail_on_error: true
+    save_to_file:
+      output_dir: "{paths.aligned}"
+      filename_template: "aligned_{index:04d}.txt"
+      data_key: "aligned_text"
+
+    process_steps:
+      - type: "read_file"
+        path_template: "{paths.original}/chunk_{index:04d}.txt"
+        output_key: "source_text"
+
+      - type: "llm_call"
+        model: "deepseek-v4-flash-nonthinking"
+        temperature: 0.2
+        max_tokens: 10000
+        validate_json: false
+        output_key: "aligned_text"
+        prompt_template: |
+          You are a professional translation and text-alignment engine.
+
+          Translate the source text into the requested target language, then align each translated sentence with its matching source sentence.
+
+          User settings:
+          - Source language: {source_language}
+          - Target language: {target_language}
+
+          Output order:
+          - Always write the translated sentence first, then the matching source sentence.
+
+          Requirements:
+          1. Preserve the meaning, tone, style, paragraph structure, names, terminology, numbers, and formatting intent of the source text.
+          2. Do not omit source information.
+          3. Do not add facts, explanations, summaries, titles, comments, or notes.
+          4. Keep paragraph breaks only where the source text has paragraph breaks.
+          5. If one source paragraph has multiple sentences, do not split each sentence pair into separate paragraphs.
+          6. Inside a paragraph, keep all sentence pairs on the same line, separated by spaces.
+          7. The square brackets in the example are placeholders only. Do not include square brackets in the output.
+          8. Output only the aligned translated text.
+
+          Abstract example:
+
+          Source text:
+          [SOURCE SENTENCE 1.] [SOURCE SENTENCE 2.]
+
+          [SOURCE SENTENCE 3.]
+
+          Expected output:
+          [TARGET TRANSLATION OF SOURCE SENTENCE 1.] [SOURCE SENTENCE 1.] [TARGET TRANSLATION OF SOURCE SENTENCE 2.] [SOURCE SENTENCE 2.]
+
+          [TARGET TRANSLATION OF SOURCE SENTENCE 3.] [SOURCE SENTENCE 3.]
+
+          Now process the actual source text below:
+
+          {source_text}
+
+  "3":
+    name: "Merge aligned chunks"
+    type: "merge_to_epub"
+    aligned_key: "2_response"
+    aligned_dir: "{paths.aligned}"
+    output_dir: "{paths.results}"
+    output_filename: "{book_name}_translated_aligned.epub"
+    book_title: "{book_name} - Translation and Alignment"
+
+display:
+  steps:
+    "1":
+      label: "Extract"
+      show: chunk_count
+    "2":
+      label: "Translate/Align"
+      show: concurrent_stats
+    "3":
+      label: "Merge"
+      show: output_files

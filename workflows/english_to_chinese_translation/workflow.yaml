@@ -1,0 +1,142 @@
+project_name: "english_to_chinese_translation"
+name: "English-to-Chinese Translation Workflow"
+description: "Extract English source text into chunks, let V4 Flash translate and align each chunk in one call, then polish and merge the outputs."
+
+paths:
+  original: "artifacts/original"
+  aligned: "artifacts/aligned"
+  polished: "artifacts/polished"
+  results: "results"
+
+workflow_graph: "1 -> 2 -> 3 -> 4 -> END"
+
+steps:
+  "1":
+    name: "Extract and split text"
+    type: "epub_extract"
+    input_key: "input_epub"
+    target_tokens: 1000
+    emergency_threshold: 1500
+    save_to_file:
+      output_dir: "{paths.original}"
+      filename_template: "chunk_{index:04d}.txt"
+
+  "2":
+    name: "Translate and align chunks with V4 Flash"
+    type: "concurrent"
+    items_key: "1_response"
+    max_concurrent: 3
+    task_dispatch_delay: 1.0
+    fail_on_error: true
+    save_to_file:
+      output_dir: "{paths.aligned}"
+      filename_template: "aligned_{index:04d}.txt"
+      data_key: "aligned_text"
+
+    process_steps:
+      - type: "read_file"
+        path_template: "{paths.original}/chunk_{index:04d}.txt"
+        output_key: "source_text"
+
+      - type: "llm_call"
+        model: "deepseek-v4-flash-nonthinking"
+        temperature: 0.2
+        max_tokens: 10000
+        validate_json: false
+        output_key: "aligned_text"
+        prompt_template: |
+          你是一位专业的英译中翻译引擎。
+
+          请把下面的英文原文翻译成中文，并输出中英逐句对照文本。
+
+          规则：
+          1. 一句中文译文在前，一句英文原文在后。
+          2. 保持原文的段落结构。
+          3. 如果原文一段有多个句子，不要把每个句子拆成单独段落。
+          4. 段落内部按“中文译文 + 英文句子”的顺序逐句排列，但不要在句子之间换行。
+          5. 只有原文段落之间可以保留空行。
+          6. 不要添加解释、总结或额外评论。
+          7. 中文译文要准确、自然、流畅，保留原文语气、逻辑关系、专有名词和关键术语。
+
+          示例原文：
+
+          After the rain stopped, the sounds on the street suddenly became clear. In the distance, someone pushed a bicycle past; its bell rang once, then was quickly scattered by the wind. She stood under the eaves and did not leave right away, only lowering her head to look at the water stains on the tips of her shoes.
+
+          Many years later, he still remembered that afternoon. Not because anything earth-shattering had happened, but because everything that day was too quiet, so quiet that life seemed to have deliberately softened its footsteps.
+
+          示例输出：
+
+          雨停以后，街上的声音忽然变得清楚起来。After the rain stopped, the sounds on the street suddenly became clear. 远处有人推着自行车经过，车铃响了一下，又很快被风吹散。In the distance, someone pushed a bicycle past; its bell rang once, then was quickly scattered by the wind. 她站在屋檐下，没有立刻离开，只是低头看着鞋尖上的水迹。She stood under the eaves and did not leave right away, only lowering her head to look at the water stains on the tips of her shoes.
+
+          很多年以后，他仍然记得那个下午。Many years later, he still remembered that afternoon. 不是因为发生了什么惊天动地的事，而是因为那天的一切都太安静了，安静得像生活故意放轻了脚步。Not because anything earth-shattering had happened, but because everything that day was too quiet, so quiet that life seemed to have deliberately softened its footsteps.
+
+          现在处理下面的英文原文，只输出中英对照结果：
+
+          {source_text}
+
+  "3":
+    name: "Polish aligned chunks"
+    type: "concurrent"
+    items_key: "1_response"
+    max_concurrent: 5
+    task_dispatch_delay: 1.0
+    fail_on_error: true
+    save_to_file:
+      output_dir: "{paths.polished}"
+      filename_template: "polished_{index:04d}.txt"
+      data_key: "polish_result.polished_text"
+
+    process_steps:
+      - type: "read_file"
+        path_template: "{paths.aligned}/aligned_{index:04d}.txt"
+        output_key: "aligned_text"
+
+      - type: "llm_call"
+        model: "deepseek-v4-flash-nonthinking"
+        temperature: 0.3
+        max_tokens: 10000
+        validate_json: true
+        required_fields: ["polished_text"]
+        output_key: "polish_result"
+        prompt_template: |
+          你是一位专业的中文编辑。你的任务是校对并润色一段中英对照文本。
+
+          要求：
+          1. 保持“一句中文译文在前，一句英文原文在后”的结构。
+          2. 保持原文段落结构；只有原文段落之间可以保留空行。
+          3. 段落内部不要把每个句子拆成单独段落。
+          4. 修正漏译、误译、不通顺、过度直译或中文表达不自然的问题。
+          5. 不要添加解释、总结、标题或额外评论。
+          6. 不要添加词汇标注。
+
+          返回格式必须是纯 JSON：
+          {{
+            "polished_text": "润色后的完整中英对照文本"
+          }}
+
+          待润色文本：
+          {aligned_text}
+
+  "4":
+    name: "Merge polished chunks"
+    type: "merge_to_epub"
+    aligned_key: "3_response"
+    aligned_dir: "{paths.polished}"
+    output_dir: "{paths.results}"
+    output_filename: "{book_name}_en_to_zh.epub"
+    book_title: "{book_name} - English-to-Chinese"
+
+display:
+  steps:
+    "1":
+      label: "Extract"
+      show: chunk_count
+    "2":
+      label: "Translate/Align"
+      show: concurrent_stats
+    "3":
+      label: "Polish"
+      show: concurrent_stats
+    "4":
+      label: "Merge"
+      show: output_files
