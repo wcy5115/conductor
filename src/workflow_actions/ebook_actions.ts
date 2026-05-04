@@ -18,13 +18,19 @@
 
 import fs from "fs";
 import path from "path";
+import { createRequire } from "module";
 import { EPub } from "epub";
 import * as cheerio from "cheerio";
 import { WorkflowContext, StepResult } from "../workflow_engine.js";
 import { BaseAction } from "./base.js";
+import {
+  terminalInternalError,
+  terminalInternalInfo,
+  terminalWarn,
+} from "../core/terminal_reporter.js";
 
 // nodepub is a CommonJS package without bundled TypeScript definitions.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+const require = createRequire(import.meta.url);
 const nodepub = require("nodepub");
 
 /**
@@ -51,9 +57,9 @@ interface NodepubDocument {
  * Keeps this action consistent with base.ts without introducing a logging dependency.
  */
 const logger = {
-  info: (msg: string) => console.info(msg),
-  error: (msg: string) => console.error(msg),
-  warn: (msg: string) => console.warn(msg),
+  info: (msg: string) => terminalInternalInfo(msg),
+  error: (msg: string) => terminalInternalError(msg),
+  warn: (msg: string) => terminalWarn(msg),
 };
 
 const DEFAULT_CHUNK_FILENAME_TEMPLATE = "chunk_{index:04d}.txt";

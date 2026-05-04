@@ -13,8 +13,8 @@ import { fileURLToPath } from "url";
 
 import { WorkflowRunner } from "../../src/core/workflow_runner.js";
 
-const INPUT_EPUB = String.raw`C:\Users\wcy51\Downloads\the_economist_2026-4-3.txt`;
-const BOOK_NAME = "The-Economist-2026-4-3";
+const INPUT_EPUB = String.raw`C:\Users\wcy51\Downloads\the economist 2 1.txt`;
+const BOOK_NAME = "the_economist_2_1";
 
 const SUPPORTED_EXTENSIONS = new Set([".epub", ".txt"]);
 

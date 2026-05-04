@@ -12,6 +12,11 @@
 import fs from "fs";
 // Node's path module, used for path joins and extension checks.
 import path from "path";
+import {
+  terminalInternalDebug,
+  terminalInternalError,
+  terminalInternalInfo,
+} from "../core/terminal_reporter.js";
 
 /**
  * Lightweight logger wrapper.
@@ -20,9 +25,9 @@ import path from "path";
  * easier to switch this module to a formal logger later.
  */
 const logger = {
-  debug: (msg: string) => console.debug(msg),
-  info: (msg: string) => console.info(msg),
-  error: (msg: string) => console.error(msg),
+  debug: (msg: string) => terminalInternalDebug(msg),
+  info: (msg: string) => terminalInternalInfo(msg),
+  error: (msg: string) => terminalInternalError(msg),
 };
 
 /**

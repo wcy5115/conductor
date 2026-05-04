@@ -15,15 +15,21 @@ import { validateAndCleanJson } from "../utils.js";
 import { LLMValidationError } from "../exceptions.js";
 import { BaseValidator } from "../validators/base.js";
 import { getValidator } from "../validators/index.js";
+import {
+  terminalInternalDebug,
+  terminalInternalError,
+  terminalInternalInfo,
+  terminalInternalWarn,
+} from "../core/terminal_reporter.js";
 
 /**
  * Lightweight logger that avoids a dependency on the core logging module.
  */
 const logger = {
-  info: (msg: string) => console.info(msg),
-  warn: (msg: string) => console.warn(msg),
-  error: (msg: string) => console.error(msg),
-  debug: (msg: string) => console.debug(msg),
+  info: (msg: string) => terminalInternalInfo(msg),
+  warn: (msg: string) => terminalInternalWarn(msg),
+  error: (msg: string) => terminalInternalError(msg),
+  debug: (msg: string) => terminalInternalDebug(msg),
 };
 
 /**

@@ -21,6 +21,7 @@ import { convertPdfToImages } from "../pdf_to_images.js";
 
 import { BaseAction } from "./base.js";
 import { formatPathTemplate } from "./utils.js";
+import { terminalInternalInfo } from "../core/terminal_reporter.js";
 
 // ============================================================
 // PDFToImagesAction
@@ -93,7 +94,7 @@ export class PDFToImagesAction extends BaseAction {
       throw new Error(`PDF path template is missing required context data: ${e}`);
     }
 
-    console.info(
+    terminalInternalInfo(
       `[Step ${this.stepId}] Starting PDF conversion: ${pdfPath} -> ${outputDir}`
     );
     const resultDir = convertPdfToImages(
@@ -112,7 +113,7 @@ export class PDFToImagesAction extends BaseAction {
       .sort()
       .map((f) => path.join(resultPath, f));
 
-    console.info(
+    terminalInternalInfo(
       `[Step ${this.stepId}] PDF conversion finished and produced ${imageFiles.length} image(s)`
     );
 

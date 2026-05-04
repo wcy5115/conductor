@@ -22,6 +22,13 @@ import { BaseAction } from "./base.js";
 // concurrentProcess is the lower-level concurrent runner. ProcessStats records
 // success, failed, skipped counts, and per-item results.
 import { concurrentProcess, ProcessStats } from "../concurrent_utils.js";
+import {
+  getActiveTerminalReporter,
+  terminalInternalDebug,
+  terminalInternalError,
+  terminalInternalInfo,
+  terminalInternalWarn,
+} from "../core/terminal_reporter.js";
 // aggregateCosts combines CostResult values by summing token and cost fields.
 import { aggregateCosts, CostResult } from "../cost_calculator.js";
 // LLMValidationError carries cost_info so failed validation attempts can still
@@ -46,10 +53,10 @@ import {
 // Lightweight logger wrapper. This is separate from core/logging.ts,
 // which handles workflow-level structured logs.
 const logger = {
-  info: (msg: string) => console.info(msg),
-  warn: (msg: string) => console.warn(msg),
-  error: (msg: string) => console.error(msg),
-  debug: (msg: string) => console.debug(msg),
+  info: (msg: string) => terminalInternalInfo(msg),
+  warn: (msg: string) => terminalInternalWarn(msg),
+  error: (msg: string) => terminalInternalError(msg),
+  debug: (msg: string) => terminalInternalDebug(msg),
 };
 
 // ============================================================
@@ -372,6 +379,7 @@ export class ConcurrentAction extends BaseAction {
     }
     // The concrete item type is left to the configured sub-steps.
     const items = rawItems as unknown[];
+    const reporter = getActiveTerminalReporter();
 
     logger.info(
       `[Step ${this.stepId}] Starting concurrent processing for ${items.length} item(s) ` +
@@ -699,6 +707,47 @@ export class ConcurrentAction extends BaseAction {
       this.taskDispatchDelay,
       `[Step ${this.stepId}] Concurrent processing`,
       this.circuitBreakerThreshold,
+      reporter
+        ? {
+            onBatchStart: (event) => {
+              reporter.batchStart({
+                stepId: this.stepId,
+                stepName: this.name,
+                total: event.total,
+                concurrency: event.maxConcurrent,
+              });
+            },
+            onItemDone: (event) => {
+              reporter.batchItemDone({
+                stepId: this.stepId,
+                stepName: this.name,
+                total: event.total,
+                success: event.success,
+                failed: event.failed,
+                skipped: event.skipped,
+                status: event.status,
+                itemLabel: event.itemLabel,
+              });
+            },
+            onBatchFinish: (event) => {
+              reporter.batchFinish({
+                stepId: this.stepId,
+                stepName: this.name,
+                total: event.total,
+                success: event.success,
+                failed: event.failed,
+                skipped: event.skipped,
+                durationSeconds: event.durationSeconds,
+                circuitBreakerTriggered: event.circuitBreakerTriggered,
+              });
+            },
+            onCircuitBreaker: () => {
+              reporter.warn(
+                `Step ${this.stepId} stopped dispatching after repeated failures`
+              );
+            },
+          }
+        : undefined,
     );
 
     // ============================================================

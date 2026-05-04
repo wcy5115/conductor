@@ -16,6 +16,12 @@ import { WorkflowContext, StepResult } from "../workflow_engine.js";
 import { BaseAction } from "./base.js";
 // formatPathTemplate expands placeholders such as {key} and {key:04d}.
 import { formatPathTemplate } from "./utils.js";
+import {
+  terminalInternalDebug,
+  terminalInternalError,
+  terminalInternalInfo,
+  terminalInternalWarn,
+} from "../core/terminal_reporter.js";
 
 /**
  * A small glob matcher.
@@ -77,11 +83,11 @@ export class SaveDataAction extends BaseAction {
  * in workflow config files.
  */
 const LOG_LEVEL_MAP: Record<string, (msg: string) => void> = {
-  debug: (msg) => console.debug(msg),
-  info: (msg) => console.info(msg),
-  warning: (msg) => console.warn(msg), // Keep compatibility with Python-style naming.
-  warn: (msg) => console.warn(msg),
-  error: (msg) => console.error(msg),
+  debug: (msg) => terminalInternalDebug(msg),
+  info: (msg) => terminalInternalInfo(msg),
+  warning: (msg) => terminalInternalWarn(msg), // Keep compatibility with Python-style naming.
+  warn: (msg) => terminalInternalWarn(msg),
+  error: (msg) => terminalInternalError(msg),
 };
 
 /**
@@ -115,7 +121,7 @@ export class LogAction extends BaseAction {
 
     // Use an inline fallback so the function type is always concrete.
     const logFn =
-      LOG_LEVEL_MAP[this.logLevel] ?? ((msg: string) => console.info(msg));
+      LOG_LEVEL_MAP[this.logLevel] ?? ((msg: string) => terminalInternalInfo(msg));
     logFn(message);
 
     return new StepResult(this.nextStep, {}, { logged: true });
@@ -176,14 +182,14 @@ export class ReadFileAction extends BaseAction {
     let content: string;
     if (!fs.existsSync(filepath)) {
       if (this.missingOk) {
-        console.warn(`read_file: file does not exist, returning empty content: ${filepath}`);
+        terminalInternalWarn(`read_file: file does not exist, returning empty content: ${filepath}`);
         content = "";
       } else {
         throw new Error(`read_file: file does not exist: ${filepath}`);
       }
     } else {
       content = fs.readFileSync(filepath, this.encoding);
-      console.debug(
+      terminalInternalDebug(
         `read_file: read succeeded: ${filepath} (${content.length} chars)`
       );
     }
@@ -244,9 +250,9 @@ export class MergeJsonFilesAction extends BaseAction {
       throw new Error(`Path template is missing required context data: ${e}`);
     }
 
-    console.info(`[Step ${this.stepId}] Starting JSON merge`);
-    console.info(`[Step ${this.stepId}] Input directory: ${inputDir}`);
-    console.info(`[Step ${this.stepId}] Output file: ${outputFile}`);
+    terminalInternalInfo(`[Step ${this.stepId}] Starting JSON merge`);
+    terminalInternalInfo(`[Step ${this.stepId}] Input directory: ${inputDir}`);
+    terminalInternalInfo(`[Step ${this.stepId}] Output file: ${outputFile}`);
 
     const returnEmptyMergeResult = (
       statusMetadata: Record<string, unknown>
@@ -274,7 +280,7 @@ export class MergeJsonFilesAction extends BaseAction {
     };
 
     if (!fs.existsSync(inputDir)) {
-      console.error(`[Step ${this.stepId}] Input directory does not exist: ${inputDir}`);
+      terminalInternalError(`[Step ${this.stepId}] Input directory does not exist: ${inputDir}`);
       return returnEmptyMergeResult({
         error: `Input directory does not exist: ${inputDir}`,
       });
@@ -286,7 +292,7 @@ export class MergeJsonFilesAction extends BaseAction {
       .map((f) => path.join(inputDir, f));
 
     if (jsonFiles.length === 0) {
-      console.warn(
+      terminalInternalWarn(
         `[Step ${this.stepId}] No matching JSON files found: ${path.join(inputDir, this.pattern)}`
       );
       return returnEmptyMergeResult({
@@ -302,7 +308,7 @@ export class MergeJsonFilesAction extends BaseAction {
       );
     }
 
-    console.info(
+    terminalInternalInfo(
       `[Step ${this.stepId}] Found ${jsonFiles.length} JSON files, preparing to merge`
     );
 
@@ -314,7 +320,7 @@ export class MergeJsonFilesAction extends BaseAction {
         const content = fs.readFileSync(jsonFile, "utf-8");
         mergedData.push(JSON.parse(content));
       } catch (e) {
-        console.error(`[Step ${this.stepId}] Failed to read file ${jsonFile}: ${e}`);
+        terminalInternalError(`[Step ${this.stepId}] Failed to read file ${jsonFile}: ${e}`);
         failedFiles.push(jsonFile);
       }
     }
@@ -322,12 +328,12 @@ export class MergeJsonFilesAction extends BaseAction {
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, JSON.stringify(mergedData, null, 2), "utf-8");
 
-    console.info(
+    terminalInternalInfo(
       `[Step ${this.stepId}] Successfully merged ${mergedData.length} files into: ${outputFile}`
     );
 
     if (failedFiles.length > 0) {
-      console.warn(
+      terminalInternalWarn(
         `[Step ${this.stepId}] ${failedFiles.length} files failed to read`
       );
     }

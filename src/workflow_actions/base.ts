@@ -26,6 +26,10 @@
 // WorkflowContext stores shared workflow state. StepResult carries the next
 // step, produced data, and metadata for a completed action.
 import { WorkflowContext, StepResult } from "../workflow_engine.js";
+import {
+  terminalInternalError,
+  terminalInternalInfo,
+} from "../core/terminal_reporter.js";
 
 /**
  * Lightweight logger.
@@ -34,8 +38,8 @@ import { WorkflowContext, StepResult } from "../workflow_engine.js";
  * surface small and avoid circular imports.
  */
 const logger = {
-  info: (msg: string) => console.info(msg),
-  error: (msg: string) => console.error(msg),
+  info: (msg: string) => terminalInternalInfo(msg),
+  error: (msg: string) => terminalInternalError(msg),
 };
 
 /**

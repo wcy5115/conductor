@@ -9,6 +9,11 @@
 import fs from "fs";
 import path from "path";
 import * as mupdf from "mupdf";
+import {
+  terminalInternalInfo,
+  terminalInternalWarn,
+  terminalError,
+} from "./core/terminal_reporter.js";
 
 // ============================================================
 // isImageValid
@@ -87,7 +92,7 @@ export function parsePageRange(
 
       let adjustedEnd = end;
       if (end > totalPages) {
-        console.log(
+        terminalInternalWarn(
           `Page range ${part} ends beyond the PDF page count; adjusting: ${end} -> ${totalPages}`
         );
         adjustedEnd = totalPages;
@@ -132,13 +137,13 @@ export function convertPdfToImages(
 ): string {
   if (!fs.existsSync(pdfPath)) {
     const errorMsg = `Error: PDF file not found at path: ${pdfPath}`;
-    console.error(errorMsg);
+    terminalError(errorMsg);
     throw new Error(errorMsg);
   }
 
   fs.mkdirSync(outputDir, { recursive: true });
-  console.log(`Images will be saved to: ${outputDir}`);
-  console.log("Starting PDF to image conversion...");
+  terminalInternalInfo(`Images will be saved to: ${outputDir}`);
+  terminalInternalInfo("Starting PDF to image conversion...");
 
   const pdfData = fs.readFileSync(pdfPath);
   const doc = mupdf.PDFDocument.openDocument(pdfData, "application/pdf");
@@ -148,9 +153,9 @@ export function convertPdfToImages(
     const pagesToConvert = parsePageRange(pageRange, totalPages);
 
     if (pageRange) {
-      console.log(`Converting ${pagesToConvert.length}/${totalPages} page(s)`);
+      terminalInternalInfo(`Converting ${pagesToConvert.length}/${totalPages} page(s)`);
     } else {
-      console.log(`Converting all ${totalPages} page(s)`);
+      terminalInternalInfo(`Converting all ${totalPages} page(s)`);
     }
 
     const existingImages = new Set<string>();
@@ -162,7 +167,7 @@ export function convertPdfToImages(
         }
       }
     }
-    console.log(`Found ${existingImages.size} existing image file(s)`);
+    terminalInternalInfo(`Found ${existingImages.size} existing image file(s)`);
 
     const zoom = dpi / 72;
     let convertedCount = 0;
@@ -172,10 +177,10 @@ export function convertPdfToImages(
       const imagePath = path.join(outputDir, imageName);
 
       if (existingImages.has(imageName) && isImageValid(imagePath)) {
-        console.log(`Skipping existing valid image: ${imageName}`);
+        terminalInternalInfo(`Skipping existing valid image: ${imageName}`);
         continue;
       } else if (existingImages.has(imageName) && !isImageValid(imagePath)) {
-        console.log(`Found corrupted image file; regenerating: ${imageName}`);
+        terminalInternalWarn(`Found corrupted image file; regenerating: ${imageName}`);
       }
 
       const page = doc.loadPage(pageNum);
@@ -191,7 +196,7 @@ export function convertPdfToImages(
       convertedCount++;
     }
 
-    console.log(
+    terminalInternalInfo(
       `Conversion finished. Requested ${pagesToConvert.length} page(s); ` +
         `rendered ${convertedCount} new page(s) and skipped ${
           pagesToConvert.length - convertedCount

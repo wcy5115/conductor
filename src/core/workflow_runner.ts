@@ -1,10 +1,14 @@
 import path from "path";
-import fs from "fs";
 
 import { WorkflowEngine, WorkflowContext } from "../workflow_engine.js";
 import { loadWorkflowFromYaml } from "../workflow_loader.js";
 import { StructuredLogger } from "./logging.js";
 import { cleanDirectory } from "../cli/clean.js";
+import {
+  TerminalReporter,
+  clearActiveTerminalReporter,
+  setActiveTerminalReporter,
+} from "./terminal_reporter.js";
 
 interface RunOptions {
   inputData: Record<string, unknown>;
@@ -58,7 +62,14 @@ export class WorkflowRunner {
       interactiveCleanup = false,
     } = options ?? {};
 
-    this._printStart();
+    const reporter = new TerminalReporter();
+    setActiveTerminalReporter(reporter);
+    reporter.workflowStart({
+      projectName: (this.config["project_name"] as string) ?? "Unknown",
+      workflowName: this.config["name"] as string | undefined,
+      workflowDir: this.workflowDir,
+      inputData,
+    });
 
     try {
       const context = await this.engine.runWorkflow({
@@ -66,8 +77,11 @@ export class WorkflowRunner {
         workflowLogger: this.logger,
       });
 
-      this._printSuccess(context);
-      this._printFileTree();
+      reporter.workflowSuccess({
+        durationSeconds: (context.metadata["totalDuration"] as number) ?? 0,
+        totalIterations: (context.metadata["totalIterations"] as number) ?? 0,
+        workflowDir: this.workflowDir,
+      });
 
       let cleaned = false;
       if (cleanupOnSuccess) {
@@ -76,7 +90,7 @@ export class WorkflowRunner {
       }
 
       if (interactiveCleanup) {
-        console.log("[Note] Interactive cleanup is not implemented yet");
+        reporter.line("[Note] Interactive cleanup is not implemented yet");
       }
 
       return {
@@ -87,7 +101,7 @@ export class WorkflowRunner {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`\nWorkflow execution failed: ${errorMessage}`);
+      reporter.workflowFailure(errorMessage, this.workflowDir);
       this.logger.error(
         "Workflow execution failed",
         error instanceof Error ? error : undefined,
@@ -97,41 +111,9 @@ export class WorkflowRunner {
         workflowDir: this.workflowDir,
         error: errorMessage,
       };
-    }
-  }
-
-  private _printStart(): void {
-    const projectName = (this.config["project_name"] as string) ?? "Unknown";
-    const separator = "=".repeat(60);
-
-    console.log(`\n${separator}`);
-    console.log(`Starting workflow: ${projectName}`);
-    console.log(separator);
-  }
-
-  private _printSuccess(context: WorkflowContext): void {
-    const totalDuration = (context.metadata["totalDuration"] as number) ?? 0;
-    const totalIterations = (context.metadata["totalIterations"] as number) ?? 0;
-    const separator = "=".repeat(60);
-
-    console.log(`\n${separator}`);
-    console.log("Workflow completed!");
-    console.log(`Total duration: ${totalDuration.toFixed(2)} seconds`);
-    console.log(`Steps executed: ${totalIterations}`);
-    console.log(`Output directory: ${this.workflowDir}`);
-    console.log(separator);
-  }
-
-  private _printFileTree(): void {
-    if (!fs.existsSync(this.workflowDir)) return;
-
-    const entries = fs.readdirSync(this.workflowDir, { withFileTypes: true });
-    if (entries.length === 0) return;
-
-    console.log("\nOutput files:");
-    for (const entry of entries) {
-      const suffix = entry.isDirectory() ? "/" : "";
-      console.log(`  ${entry.name}${suffix}`);
+    } finally {
+      reporter.finish();
+      clearActiveTerminalReporter(reporter);
     }
   }
 

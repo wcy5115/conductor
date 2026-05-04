@@ -14,6 +14,13 @@
  *   - Any batch operation that should stop automatically after repeated failures.
  */
 
+import {
+  terminalInternalDebug,
+  terminalInternalError,
+  terminalInternalInfo,
+  terminalInternalWarn,
+} from "./core/terminal_reporter.js";
+
 // ============================================================
 // Type definitions
 // ============================================================
@@ -83,6 +90,26 @@ export interface ProcessStats {
   circuitBreakerTriggered: boolean;
   /** Results for all processed tasks, including success, failure, and skipped items, in completion order instead of input order. */
   items: ItemResult[];
+}
+
+export interface ConcurrentProgressCallbacks {
+  onBatchStart?: (event: {
+    label: string;
+    total: number;
+    maxConcurrent: number;
+    dispatchDelay: number;
+    circuitBreakerThreshold: number;
+  }) => void;
+  onItemDone?: (event: {
+    status: ProcessStatus;
+    itemLabel: string;
+    total: number;
+    success: number;
+    failed: number;
+    skipped: number;
+  }) => void;
+  onBatchFinish?: (event: ProcessStats & { durationSeconds: number }) => void;
+  onCircuitBreaker?: (event: { threshold: number }) => void;
 }
 
 // ============================================================
@@ -177,6 +204,7 @@ export async function concurrentProcess<T>(
   taskDispatchDelay?: number,
   progressDesc = "Processing progress",
   circuitBreakerThreshold = 10,
+  progressCallbacks?: ConcurrentProgressCallbacks,
 ): Promise<ProcessStats> {
   // Determine the dispatch delay: prefer the explicit argument, then the environment variable, then 0.5 seconds.
   // TASK_DISPATCH_DELAY lets operators adjust the delay without changing code.
@@ -184,6 +212,7 @@ export async function concurrentProcess<T>(
   const delay = taskDispatchDelay ?? parseFloat(process.env["TASK_DISPATCH_DELAY"] ?? "0.5");
 
   const total = items.length;
+  const startedAt = Date.now();
 
   // Initialize statistics; all counters start from 0.
   const stats: ProcessStats = {
@@ -273,7 +302,15 @@ export async function concurrentProcess<T>(
     return false;  // false means the failure threshold has not been reached yet.
   };
 
-  console.info(
+  progressCallbacks?.onBatchStart?.({
+    label: progressDesc,
+    total,
+    maxConcurrent,
+    dispatchDelay: delay,
+    circuitBreakerThreshold,
+  });
+
+  terminalInternalInfo(
     `Concurrent processor initialized - max concurrency:${maxConcurrent}, dispatch delay:${delay}s, circuit breaker threshold:${circuitBreakerThreshold}`,
   );
 
@@ -325,7 +362,7 @@ export async function concurrentProcess<T>(
         } catch (e) {
           // Treat exceptions from processFunc as fatal_error.
           // Catching them here keeps one task failure from interrupting the whole batch.
-          console.error(`Exception while processing item: ${e}`);
+          terminalInternalError(`Exception while processing item: ${e}`);
           // Extract the exception class name, such as "TypeError" or "NetworkError", for debugging.
           const name = e instanceof Error ? e.constructor.name : "Error";
           status = "fatal_error";
@@ -343,31 +380,7 @@ export async function concurrentProcess<T>(
           result: status === "success" || status === "skipped" ? result : { error: String(result) },
         });
 
-        // ---- Per-task logs: record success, failure, and skipped tasks. ----
-        // Build a concise task label, such as a filename, truncated string, or object key list.
         const itemLabel = formatItemLabel(item);
-        const idx = stats.success + stats.failed + stats.skipped; // About to add 1.
-        if (status === "success") {
-          console.info(`✓ [${idx + 1}/${total}] ${itemLabel} succeeded`);
-        } else if (status === "skipped") {
-          // Try to extract the reason for skipped tasks. ConcurrentAction includes a reason field in result.
-          let reason = "";
-          if (result !== null && typeof result === "object" && !Array.isArray(result)) {
-            reason = String((result as Record<string, unknown>)["reason"] ?? "");
-          }
-          console.info(`⏭ [${idx + 1}/${total}] ${itemLabel} skipped${reason ? ` (${reason})` : ""}`);
-        } else {
-          // retriable_error or fatal_error
-          let errorBrief = "";
-          if (result !== null && typeof result === "object" && !Array.isArray(result)) {
-            errorBrief = String((result as Record<string, unknown>)["error"] ?? "");
-          } else if (typeof result === "string") {
-            errorBrief = result;
-          }
-          // Truncate overly long errors to avoid noisy logs.
-          if (errorBrief.length > 150) errorBrief = errorBrief.slice(0, 150) + "...";
-          console.error(`✗ [${idx + 1}/${total}] ${itemLabel} failed: ${errorBrief}`);
-        }
 
         // Update the matching counter based on status and notify the circuit breaker.
         if (status === "success") {
@@ -381,21 +394,21 @@ export async function concurrentProcess<T>(
           stats.failed++;
           if (recordFailure()) {
             // recordFailure() returns true when it just triggered the circuit breaker.
-            console.error(`Circuit breaker triggered after ${circuitBreakerThreshold} consecutive failures`);
+            terminalInternalError(`Circuit breaker triggered after ${circuitBreakerThreshold} consecutive failures`);
+            progressCallbacks?.onCircuitBreaker?.({ threshold: circuitBreakerThreshold });
             stats.circuitBreakerTriggered = true;
           }
         }
 
-        // Progress output using single-line overwrite mode.
-        // \r is carriage return: it moves the cursor back to the line start without adding a newline.
-        // The next write overwrites the current line, producing an in-place progress display.
-        // The two trailing spaces cover any leftover characters from a longer previous output.
-        // Example output: \rProcessing progress: 42/100 (42.0%) [success]
-        const done = stats.success + stats.failed + stats.skipped;
-        const pct = ((done / total) * 100).toFixed(1);  // toFixed(1) keeps one decimal place.
-        process.stdout.write(`\r${progressDesc}: ${done}/${total} (${pct}%) [${status}]  `);
-        // Print a newline after all tasks finish so later console output does not stick to the progress line.
-        if (done === total) process.stdout.write("\n");
+        terminalInternalDebug(`[${stats.success + stats.failed + stats.skipped}/${total}] ${itemLabel} ${status}`);
+        progressCallbacks?.onItemDone?.({
+          status,
+          itemLabel,
+          total,
+          success: stats.success,
+          failed: stats.failed,
+          skipped: stats.skipped,
+        });
       } finally {
         // finally ensures the semaphore permit is returned whether the task succeeds or throws.
         // Without release(), waiting tasks could never acquire a permit, causing a deadlock.
@@ -411,12 +424,14 @@ export async function concurrentProcess<T>(
   await Promise.all(promises);
 
   // Output the final summary.
-  console.info(
+  const durationSeconds = (Date.now() - startedAt) / 1000;
+  terminalInternalInfo(
     `Batch processing complete - total:${stats.total}, succeeded:${stats.success}, failed:${stats.failed}, skipped:${stats.skipped}`,
   );
   if (stats.circuitBreakerTriggered) {
-    console.warn("Circuit breaker was triggered; some tasks were not executed");
+    terminalInternalWarn("Circuit breaker was triggered; some tasks were not executed");
   }
+  progressCallbacks?.onBatchFinish?.({ ...stats, durationSeconds });
 
   return stats;
 }

@@ -1,4 +1,11 @@
 import { StructuredLogger } from "./core/logging.js";
+import {
+  getActiveTerminalReporter,
+  terminalInternalDebug,
+  terminalInternalError,
+  terminalInternalInfo,
+  terminalWarn,
+} from "./core/terminal_reporter.js";
 import type { WorkflowGraph } from "./workflow_parser.js";
 
 export class StepResult {
@@ -74,14 +81,14 @@ export class WorkflowEngine {
 
   constructor(workflowGraph?: WorkflowGraph) {
     this.workflowGraph = workflowGraph ?? null;
-    console.info(
+    terminalInternalInfo(
       `Workflow engine initialized ${workflowGraph ? "(v2.0 mode)" : "(v1.0 mode)"}`,
     );
   }
 
   registerAction(stepId: string, action: ActionFn, actionName?: string): void {
     if (this._actionRegistry.has(stepId)) {
-      console.warn(`Step ${stepId} already exists and will be overwritten`);
+      terminalWarn(`Step ${stepId} already exists and will be overwritten`);
     }
 
     this._actionRegistry.set(stepId, {
@@ -127,7 +134,7 @@ export class WorkflowEngine {
     let currentStep = effectiveStartStep;
     let iterationCount = 0;
 
-    console.info(
+    terminalInternalInfo(
       `Starting workflow: ${context.workflowId}, start step: ${effectiveStartStep}`,
     );
     if (workflowLogger) {
@@ -143,7 +150,7 @@ export class WorkflowEngine {
           );
         }
 
-        console.info(`Running step: ${currentStep} (iteration ${iterationCount})`);
+        terminalInternalInfo(`Running step: ${currentStep} (iteration ${iterationCount})`);
         const registeredAction = this._actionRegistry.get(currentStep);
         if (!registeredAction) {
           const available = [...this._actionRegistry.keys()].join(", ");
@@ -153,6 +160,12 @@ export class WorkflowEngine {
         }
 
         const { action, name: stepName } = registeredAction;
+        getActiveTerminalReporter()?.stepStart({
+          stepId: currentStep,
+          stepName,
+          iteration: iterationCount,
+          totalSteps: this._actionRegistry.size,
+        });
         if (workflowLogger) {
           workflowLogger.stepStart(currentStep, stepName, {});
         }
@@ -180,8 +193,14 @@ export class WorkflowEngine {
             stepDuration,
           );
         }
+        getActiveTerminalReporter()?.stepEnd({
+          stepId: currentStep,
+          stepName,
+          durationSeconds: stepDuration,
+          metadata: result.metadata,
+        });
 
-        console.debug(
+        terminalInternalDebug(
           `Step ${currentStep} completed in ${stepDuration.toFixed(2)}s; next step: ${result.nextStep}`,
         );
         if (!result.nextStep) {
@@ -197,7 +216,7 @@ export class WorkflowEngine {
       context.metadata["totalDuration"] = totalDuration;
       context.metadata["totalIterations"] = iterationCount;
 
-      console.info(
+      terminalInternalInfo(
         `Workflow completed: ${context.workflowId}, total duration ${totalDuration.toFixed(2)}s, ${iterationCount} steps`,
       );
       if (workflowLogger) {
@@ -207,7 +226,7 @@ export class WorkflowEngine {
 
       return context;
     } catch (e) {
-      console.error(`Workflow execution failed: ${e}`);
+      terminalInternalError(`Workflow execution failed: ${e}`);
       context.metadata["error"] = String(e);
       context.metadata["failedStep"] = currentStep;
       throw e;
@@ -230,7 +249,7 @@ export class WorkflowEngine {
 
   clearRegistry(): void {
     this._actionRegistry.clear();
-    console.info("Step registry cleared");
+    terminalInternalInfo("Step registry cleared");
   }
 }
 

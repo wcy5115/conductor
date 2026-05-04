@@ -4,7 +4,14 @@ import path from "path";
 
 import { WorkflowEngine } from "./workflow_engine.js";
 import { FractalParser, WorkflowGraph, autoOutputKey } from "./workflow_parser.js";
-import { StructuredLogger } from "./core/logging.js";
+import { LogLevel, StructuredLogger } from "./core/logging.js";
+import {
+  isSilentTerminal,
+  isVerboseTerminal,
+  terminalError,
+  terminalInternalDebug,
+  terminalInternalInfo,
+} from "./core/terminal_reporter.js";
 import { BaseAction } from "./workflow_actions/base.js";
 import { LLMCallAction } from "./workflow_actions/llm_actions.js";
 import {
@@ -39,9 +46,9 @@ interface LoadResult {
 }
 
 const logger = {
-  info: (msg: string) => console.info(`[WorkflowLoader] ${msg}`),
-  debug: (msg: string) => console.debug(`[WorkflowLoader] ${msg}`),
-  error: (msg: string) => console.error(`[WorkflowLoader] ${msg}`),
+  info: (msg: string) => terminalInternalInfo(`[WorkflowLoader] ${msg}`),
+  debug: (msg: string) => terminalInternalDebug(`[WorkflowLoader] ${msg}`),
+  error: (msg: string) => terminalError(`[WorkflowLoader] ${msg}`),
 };
 
 export function resolvePathPlaceholders(
@@ -169,7 +176,11 @@ export class WorkflowLoader {
 
     const logsDir = path.join(workflowDir, "logs");
     fs.mkdirSync(logsDir, { recursive: true });
-    const workflowLogger = new StructuredLogger({ logDir: logsDir });
+    const workflowLogger = new StructuredLogger({
+      logDir: logsDir,
+      enableConsole: !isSilentTerminal(),
+      consoleLevel: isVerboseTerminal() ? LogLevel.INFO : LogLevel.WARNING,
+    });
 
     return { workflowDir, workflowLogger };
   }
@@ -420,7 +431,7 @@ export class WorkflowLoader {
       const content = deepGet(data, dataKey, "") as string;
       saveToFile(filepath, content);
       if (showMessage) {
-        console.log(`[OK] Saved file: ${filepath}`);
+        terminalInternalInfo(`[OK] Saved file: ${filepath}`);
       }
     };
 

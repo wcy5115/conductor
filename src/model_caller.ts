@@ -28,6 +28,11 @@ import * as yaml from "js-yaml";
 import { fileURLToPath } from "url";
 import { chat, LlmResult, LlmCallOptions } from "./llm_client.js";
 import { mockLlmCall, isMockModel, MockConfig } from "./mock_llm.js";
+import {
+  terminalInternalInfo,
+  terminalWarn,
+  terminalError,
+} from "./core/terminal_reporter.js";
 
 /**
  * Minimal logger.
@@ -35,9 +40,9 @@ import { mockLlmCall, isMockModel, MockConfig } from "./mock_llm.js";
  * Keeping this tiny avoids adding a logging dependency to the core library.
  */
 const logger = {
-  info: (msg: string) => console.info(msg),
-  warning: (msg: string) => console.warn(msg),
-  error: (msg: string) => console.error(msg),
+  info: (msg: string) => terminalInternalInfo(msg),
+  warning: (msg: string) => terminalWarn(msg),
+  error: (msg: string) => terminalError(msg),
 };
 
 // ============================================================
@@ -186,7 +191,7 @@ function loadModelMappings(): ModelMappings {
     if (mockRaw && typeof mockRaw === "object") {
       const mockMappings = resolveEnvPlaceholders(mockRaw) as ModelMappings;
       Object.assign(mappings, mockMappings);
-      logger.info(`Loaded mock model config: ${mockYamlPath} (${Object.keys(mockMappings).length} models)`);
+      logger.info(`Loaded optional mock model aliases: ${mockYamlPath} (${Object.keys(mockMappings).length} models)`);
     }
   }
 
