@@ -7,13 +7,25 @@
 #
 # 价格单位：人民币 / 百万 tokens
 
-# ==================== GPT-4 ====================
+# ==================== DeepSeek V4 Flash ====================
 deepseek-v4-flash-nonthinking:
-  - enabled: true          # 当前启用：SilconFlow 官方
-    provider: silconflow
+  - enabled: true          # 当前启用：SiliconFlow 官方
+    provider: siliconflow
     api_url: https://api.siliconflow.cn/v1/chat/completions
-    api_key: ${SILCONFLOW_API_KEY}
+    api_key: ${SILICONFLOW_API_KEY}
     model_name: deepseek-ai/DeepSeek-V4-Flash
+    temperature: 0.7
+    max_tokens: 10000
+    pricing:
+      input: 1
+      output: 2
+      currency: CNY
+
+  - enabled: false
+    provider: deepseek
+    api_url: https://api.deepseek.com/v1/chat/completions
+    api_key: ${DEEPSEEK_API_KEY}
+    model_name: deepseek-v4-flash
     temperature: 0.7
     max_tokens: 10000
     pricing:
@@ -25,38 +37,12 @@ deepseek-v4-flash-nonthinking:
     provider: openrouter
     api_url: https://openrouter.ai/api/v1/chat/completions
     api_key: ${OPENROUTER_API_KEY}
-    model_name: openai/gpt-4
+    model_name: deepseek/deepseek-v4-flash
     temperature: 0.7
-    max_tokens: 4000
+    max_tokens: 10000
     pricing:
-      input: 28.0
-      output: 58.0
-      currency: CNY
-
-# ==================== Gemini 3 ====================
-genmini3:
-  - enabled: true
-    provider: UnifyLLM
-    api_url: https://apihk.unifyllm.top/v1/chat/completions
-    api_key: ${UNIFYLLM_API_KEY}
-    model_name: gemini-3-pro-preview-thinking
-    temperature: 1
-    max_tokens: 8000
-    pricing:
-      input: 1.2
-      output: 7.2
-      currency: CNY
-
-  - enabled: false
-    provider: openrouter
-    api_url: https://openrouter.ai/api/v1/chat/completions
-    api_key: ${OPENROUTER_API_KEY}
-    model_name: openai/gpt-4
-    temperature: 0.7
-    max_tokens: 4000
-    pricing:
-      input: 28.0
-      output: 58.0
+      input: 1
+      output: 2
       currency: CNY
 
 # ==================== Qwen VL ====================

@@ -25,7 +25,7 @@ steps:
     name: "Translate and align chunks with V4 Flash"
     type: "concurrent"
     items_key: "1_response"
-    max_concurrent: 3
+    max_concurrent: 15
     task_dispatch_delay: 1.0
     fail_on_error: true
     save_to_file:
@@ -78,7 +78,7 @@ steps:
     name: "Polish aligned chunks"
     type: "concurrent"
     items_key: "1_response"
-    max_concurrent: 5
+    max_concurrent: 15
     task_dispatch_delay: 1.0
     fail_on_error: true
     save_to_file:
