@@ -28,13 +28,18 @@ import { WorkflowRunner } from "../../src/core/workflow_runner.js";
 // ============================================================
 
 // INPUT_PDF：输入 PDF 文件路径
-const INPUT_PDF = String.raw`C:\Users\wcy51\Downloads\example.pdf`;
+const INPUT_PDF = String.raw``;
 
 // ============================================================
 // 主函数
 // ============================================================
 
 async function main(): Promise<void> {
+  if (!INPUT_PDF) {
+    console.error("Please fill in INPUT_PDF in this runner.");
+    process.exit(1);
+  }
+
   // 第一步：检查输入文件是否存在
   if (!fs.existsSync(INPUT_PDF)) {
     console.error(`错误：找不到 PDF 文件: ${INPUT_PDF}`);

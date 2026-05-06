@@ -1,8 +1,11 @@
 node_modules/
 dist/
-*.js.map
-.env
-.env.local
-CLAUDE.md
 coverage/
 data/
+
+.env
+.env.*
+!.env.example
+
+*.js.map
+CLAUDE.md

@@ -24,7 +24,7 @@ This project is in early development. The core workflow engine, concurrent proce
 
 - Node.js 20 or newer
 - npm
-- An API key for at least one configured LLM provider(Openrouter, Deepseek, Siliconflow, or something else based on your config)
+- An API key for at least one configured LLM provider (OpenRouter, DeepSeek, SiliconFlow, or another provider in your config)
 
 ## Installation
 
@@ -46,7 +46,7 @@ Copy-Item .env.example .env
 
 Then open `.env`, enable real LLM calls, and fill in the API key for the provider you want to use.
 
-For translation workflows, the default model alias is `deepseek-v4-flash-nonthinking`. It can use SiliconFlow, DeepSeek, or OpenRouter as the provider. SiliconFlow is enabled by default. You can switch providers in `models.yaml`, or edit `models.yaml` and the workflow YAML files to add other providers.
+For translation workflows, the default model alias is `deepseek-v4-flash-nonthinking`. It can use SiliconFlow, DeepSeek, or OpenRouter as the provider. OpenRouter is enabled by default in `models.yaml`. You can switch providers in `models.yaml`, or edit `models.yaml` and the workflow YAML files to add other providers.
 
 ```env
 LLM_API_ENABLE=true

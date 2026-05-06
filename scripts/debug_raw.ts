@@ -33,11 +33,11 @@ import { imageToBase64, getImageMimeType } from "../src/utils.js";
 // ================================================================
 
 // MODEL：要测试的模型简称，需与 models.yaml 中的 key 一致
-const MODEL = "gpt5.5";
+const MODEL = "deepseek-v4-flash-nonthinking";
 
 // PROMPT：发送给模型的提示词
 const PROMPT =
-  "请把下面这串无声调拼音转换成最自然的汉字，只输出汉字，不要解释：daodishishenmcainengrangnirucizhebanxionghanmengliegangmeng";
+  'Reply with JSON only: {"status":"ok","message":"hello from Conductor"}';
 
 // IMAGE_PATH：图片路径配置，支持三种形式：
 //   null      → 不发送图片（纯文本模式）

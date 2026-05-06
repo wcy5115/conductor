@@ -13,12 +13,17 @@ import { fileURLToPath } from "url";
 
 import { WorkflowRunner } from "../../src/core/workflow_runner.js";
 
-const INPUT_EPUB = String.raw`C:\Users\wcy51\Downloads\the_economist_2026-4-3.txt`;
-const BOOK_NAME = "The-Economist-2026-4-3";
+const INPUT_EPUB = String.raw``;
+const BOOK_NAME = "";
 
 const SUPPORTED_EXTENSIONS = new Set([".epub", ".txt"]);
 
 async function main(): Promise<void> {
+  if (!INPUT_EPUB || !BOOK_NAME) {
+    console.error("Please fill in INPUT_EPUB and BOOK_NAME in this runner.");
+    process.exit(1);
+  }
+
   if (!fs.existsSync(INPUT_EPUB)) {
     console.error(`Input file not found: ${INPUT_EPUB}`);
     console.error("Please update INPUT_EPUB in this runner.");

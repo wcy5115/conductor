@@ -25,10 +25,10 @@ import { WorkflowRunner } from "../../src/core/workflow_runner.js";
 // ============================================================
 
 // INPUT_EPUB：输入电子书文件的路径（支持 .epub 和 .txt）
-const INPUT_EPUB = String.raw`C:\Users\wcy51\Downloads\the_economist_2026-4-3.txt`;
+const INPUT_EPUB = String.raw``;
 
 // BOOK_NAME：书名，用于输出文件的命名（如 "浪潮之巅_translated.epub"）
-const BOOK_NAME = "The-Economist-2026-4-3";
+const BOOK_NAME = "";
 
 // ============================================================
 // 主函数
@@ -37,6 +37,11 @@ const BOOK_NAME = "The-Economist-2026-4-3";
 const SUPPORTED_EXTENSIONS = new Set([".epub", ".txt"]);
 
 async function main(): Promise<void> {
+  if (!INPUT_EPUB || !BOOK_NAME) {
+    console.error("Please fill in INPUT_EPUB and BOOK_NAME in this runner.");
+    process.exit(1);
+  }
+
   // 第一步：检查输入文件是否存在
   if (!fs.existsSync(INPUT_EPUB)) {
     console.error(`错误：找不到输入文件: ${INPUT_EPUB}`);
