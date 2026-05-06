@@ -30,12 +30,13 @@
 
 // Mock calls return the same content + usage shape as real LLM calls.
 import { LlmResult, UsageDict } from "./llm_client.js";
+import { terminalInternalInfo } from "./core/terminal_reporter.js";
 
 /**
  * Minimal logger, matching the lightweight style used by the other modules.
  */
 const logger = {
-  info: (msg: string) => console.info(msg),
+  info: (msg: string) => terminalInternalInfo(msg),
 };
 
 // ============================================================

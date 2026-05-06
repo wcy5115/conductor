@@ -17,6 +17,11 @@
  */
 
 import { BaseValidator } from "./base.js";
+import { terminalInternalDebug } from "../core/terminal_reporter.js";
+
+const console = {
+  debug: terminalInternalDebug,
+};
 
 function formatValuePreview(value: unknown, maxLength = 200): string {
   let repr: string;

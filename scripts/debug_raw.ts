@@ -12,6 +12,8 @@
  *   npx tsx scripts/debug_raw.ts
  */
 
+import "dotenv/config";
+
 // fs 是 Node.js 内置的文件系统模块，用于检查图片文件是否存在
 import * as fs from "fs";
 // MODEL_MAPPINGS 是从 models.yaml 加载的全部模型配置字典
@@ -31,10 +33,11 @@ import { imageToBase64, getImageMimeType } from "../src/utils.js";
 // ================================================================
 
 // MODEL：要测试的模型简称，需与 models.yaml 中的 key 一致
-const MODEL = "doubao-vision";
+const MODEL = "gpt5.5";
 
 // PROMPT：发送给模型的提示词
-const PROMPT = "提取图片内容，输出JSON";
+const PROMPT =
+  "请把下面这串无声调拼音转换成最自然的汉字，只输出汉字，不要解释：daodishishenmcainengrangnirucizhebanxionghanmengliegangmeng";
 
 // IMAGE_PATH：图片路径配置，支持三种形式：
 //   null      → 不发送图片（纯文本模式）
@@ -187,6 +190,8 @@ async function main(): Promise<void> {
   const payload: Record<string, unknown> = {
     model: modelName, // 模型全名
     messages: [{ role: "user", content }], // 消息列表（这里只有一条用户消息）
+    temperature: config.temperature ?? 0.7,
+    max_tokens: config.max_tokens ?? 2000,
     ...extraParams, // 展开额外参数（如 temperature、max_tokens 等）
   };
 

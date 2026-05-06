@@ -5,12 +5,18 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import {
+  terminalInternalDebug,
+  terminalInternalError,
+  terminalInternalInfo,
+} from "./core/terminal_reporter.js";
 
-// Temporary console logger until this module is migrated to core/logging.ts.
+// Internal logger. Normal terminal runs keep these details quiet so progress
+// output remains a single refreshed line.
 const logger = {
-  info: (msg: string) => console.info(msg),
-  error: (msg: string) => console.error(msg),
-  debug: (msg: string) => console.debug(msg),
+  info: (msg: string) => terminalInternalInfo(msg),
+  error: (msg: string) => terminalInternalError(msg),
+  debug: (msg: string) => terminalInternalDebug(msg),
 };
 
 // ============================================================

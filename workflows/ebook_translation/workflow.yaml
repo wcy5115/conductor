@@ -70,9 +70,9 @@ steps:
           {text}
 
           **返回格式（纯JSON）**
-          {{
+          {
             "translated_text": "完整英文翻译"
-          }}
+          }
 
         output_key: "translation_result"
 
@@ -127,9 +127,9 @@ steps:
           {translated_text}
 
           **返回格式（纯JSON）**
-          {{
+          {
             "aligned_text": "中文句一。 English sentence one. 中文句二。 English sentence two."
-          }}
+          }
 
         output_key: "alignment_result"
 
@@ -195,9 +195,9 @@ steps:
           {aligned_text}
 
           **返回格式（纯JSON）**
-          {{{{
+          {
             "polished_text": "处理后的完整文本"
-          }}}}
+          }
 
         output_key: "polish_result"
 

@@ -25,6 +25,15 @@
 
 // BaseValidator is the abstract base class for all validators.
 import { BaseValidator } from "./base.js";
+import {
+  terminalInternalDebug,
+  terminalInternalWarn,
+} from "../core/terminal_reporter.js";
+
+const console = {
+  debug: terminalInternalDebug,
+  warn: terminalInternalWarn,
+};
 
 function formatValuePreview(
   value: unknown,

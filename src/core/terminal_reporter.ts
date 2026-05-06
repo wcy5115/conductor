@@ -20,6 +20,7 @@ interface ActiveBatch {
   startedAt: number;
   lastLineLength: number;
   lastPrintedDone: number;
+  lastRenderAt: number;
 }
 
 export function formatDuration(seconds: number): string {
@@ -88,6 +89,7 @@ export class TerminalReporter {
       startedAt: Date.now(),
       lastLineLength: 0,
       lastPrintedDone: -1,
+      lastRenderAt: 0,
     };
     this.renderBatch({
       stepId: params.stepId,
@@ -104,6 +106,10 @@ export class TerminalReporter {
     const done = event.success + event.failed + event.skipped;
     if (!process.stdout.isTTY) {
       this.printNonTtyProgress(event, done);
+      return;
+    }
+    const batch = this.activeBatch;
+    if (batch && done !== event.total && Date.now() - batch.lastRenderAt < 120) {
       return;
     }
     this.renderBatch(event);
@@ -178,14 +184,17 @@ export class TerminalReporter {
     const completed = event.success + event.skipped;
     const pct = event.total > 0 ? ((done / event.total) * 100).toFixed(1) : "100.0";
     const elapsed = formatDuration((Date.now() - batch.startedAt) / 1000);
-    const failed = event.failed > 0 ? `, failed ${event.failed}` : "";
+    const skipped = event.skipped > 0 ? ` skip ${event.skipped}` : "";
+    const failed = event.failed > 0 ? ` fail ${event.failed}` : "";
+    const bar = this.formatProgressBar(done, event.total);
     const line =
-      `  Progress: ${done}/${event.total} (${pct}%) completed ${completed}${failed}, ` +
-      `running up to ${batch.concurrency}, elapsed ${elapsed}`;
+      `  ${bar} ${done}/${event.total} ${pct}% ok ${completed}` +
+      `${skipped}${failed} ${elapsed}`;
 
     batch.lastLineLength = Math.max(batch.lastLineLength, line.length);
     batch.lastPrintedDone = done;
-    process.stdout.write(`\r${line}${" ".repeat(Math.max(0, batch.lastLineLength - line.length))}`);
+    batch.lastRenderAt = Date.now();
+    this.writeActiveLine(line);
   }
 
   private printNonTtyProgress(event: BatchProgressEvent, done: number): void {
@@ -195,16 +204,43 @@ export class TerminalReporter {
     if (done !== event.total && done - batch.lastPrintedDone < interval) return;
     batch.lastPrintedDone = done;
     const completed = event.success + event.skipped;
-    const failed = event.failed > 0 ? `, failed ${event.failed}` : "";
-    this.line(`  Progress: ${done}/${event.total} completed ${completed}${failed}`);
+    const pct = event.total > 0 ? ((done / event.total) * 100).toFixed(1) : "100.0";
+    const resumed = event.skipped > 0 ? ` skip ${event.skipped}` : "";
+    const failed = event.failed > 0 ? ` fail ${event.failed}` : "";
+    this.line(
+      `  ${this.formatProgressBar(done, event.total)} ${done}/${event.total} ${pct}% ` +
+      `ok ${completed}${resumed}${failed}`
+    );
   }
 
   private clearActiveLine(): void {
     if (!this.activeBatch || this.activeBatch.lastLineLength === 0 || !process.stdout.isTTY) {
       return;
     }
-    process.stdout.write(`\r${" ".repeat(this.activeBatch.lastLineLength)}\r`);
+    if (typeof process.stdout.clearLine === "function" && typeof process.stdout.cursorTo === "function") {
+      process.stdout.clearLine(0);
+      process.stdout.cursorTo(0);
+    } else {
+      process.stdout.write(`\r${" ".repeat(this.activeBatch.lastLineLength)}\r`);
+    }
     this.activeBatch.lastLineLength = 0;
+  }
+
+  private writeActiveLine(line: string): void {
+    if (typeof process.stdout.clearLine === "function" && typeof process.stdout.cursorTo === "function") {
+      process.stdout.clearLine(0);
+      process.stdout.cursorTo(0);
+      process.stdout.write(line);
+      return;
+    }
+    process.stdout.write(`\r${line}${" ".repeat(Math.max(0, (this.activeBatch?.lastLineLength ?? 0) - line.length))}`);
+  }
+
+  private formatProgressBar(done: number, total: number): string {
+    const width = 16;
+    const ratio = total > 0 ? Math.min(1, Math.max(0, done / total)) : 1;
+    const filled = Math.round(ratio * width);
+    return `[${"#".repeat(filled)}${"-".repeat(width - filled)}]`;
   }
 
   private findInputPath(inputData: Record<string, unknown>): string | null {

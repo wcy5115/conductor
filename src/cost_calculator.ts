@@ -14,13 +14,18 @@
  */
 
 import { getModelPricingInfo } from "./model_caller.js";
+import {
+  terminalInternalDebug,
+  terminalInternalInfo,
+  terminalInternalWarn,
+} from "./core/terminal_reporter.js";
 
-// Temporary console-backed logger until the project-level logger is introduced.
+// Internal logger. Normal terminal runs keep these details quiet so the active
+// progress bar is not broken by per-call cost messages.
 const logger = {
-  info: (msg: string) => console.info(msg),
-  warn: (msg: string) => console.warn(msg),
-  error: (msg: string) => console.error(msg),
-  debug: (msg: string) => console.debug(msg),
+  info: (msg: string) => terminalInternalInfo(msg),
+  warn: (msg: string) => terminalInternalWarn(msg),
+  debug: (msg: string) => terminalInternalDebug(msg),
 };
 
 // ============================================================

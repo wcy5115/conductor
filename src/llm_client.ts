@@ -23,6 +23,12 @@ import { processMessagesWithImages } from "./utils.js";
 // estimateTokensFromText: estimate token counts from text length.
 // This used to live in llm_client.ts, but token and cost logic is centralized in cost_calculator.ts.
 import { estimateTokensFromText } from "./cost_calculator.js";
+import {
+  terminalInternalDebug,
+  terminalInternalError,
+  terminalInternalInfo,
+  terminalInternalWarn,
+} from "./core/terminal_reporter.js";
 
 // ============================================================
 // Simple logger
@@ -41,10 +47,10 @@ import { estimateTokensFromText } from "./cost_calculator.js";
  *   - debug:   debug details, such as successful image conversion.
  */
 const logger = {
-  info: (msg: string) => console.info(msg),
-  warning: (msg: string) => console.warn(msg),
-  error: (msg: string) => console.error(msg),
-  debug: (msg: string) => console.debug(msg),
+  info: (msg: string) => terminalInternalInfo(msg),
+  warning: (msg: string) => terminalInternalWarn(msg),
+  error: (msg: string) => terminalInternalError(msg),
+  debug: (msg: string) => terminalInternalDebug(msg),
 };
 
 // ============================================================
