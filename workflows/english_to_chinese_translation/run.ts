@@ -13,10 +13,24 @@ import { fileURLToPath } from "url";
 
 import { WorkflowRunner } from "../../src/core/workflow_runner.js";
 
-const INPUT_EPUB = String.raw``;
+const RAW_INPUT_EPUB = String.raw``;
+const INPUT_EPUB = normalizeInputPath(RAW_INPUT_EPUB);
 const BOOK_NAME = "";
 
 const SUPPORTED_EXTENSIONS = new Set([".epub", ".txt"]);
+
+function normalizeInputPath(inputPath: string): string {
+  const trimmed = inputPath.trim();
+
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+
+  return trimmed;
+}
 
 async function main(): Promise<void> {
   if (!INPUT_EPUB || !BOOK_NAME) {
