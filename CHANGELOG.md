@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1] - 2026-05-08
+
+### Changed
+
+- Normalized quoted English-to-Chinese workflow input paths by trimming whitespace
+  and removing matching wrapping single or double quotes before validation and
+  execution.
+
 
 ## [0.1.0] - 2026-05-06
 
