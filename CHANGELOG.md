@@ -2,6 +2,13 @@
 
 ## [0.1.2] - 2026-05-09
 
+### Changed
+
+- Raised configured `max_tokens` values in model and workflow YAML files to
+  `90000`.
+- Increased default LLM retry attempts to `5` and the default retry delay to
+  `60` seconds.
+
 ### Fixed
 
 - Preserved exhausted retriable LLM/API failures as `retriable_error` inside

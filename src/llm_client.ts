@@ -143,8 +143,8 @@ export type RetryBackoff = "fixed" | "linear" | "exponential";
  *
  * temperature:    generation randomness, from 0.0 most deterministic to 2.0 most random; default 0.7.
  * max_tokens:     maximum number of generated tokens; default 2000.
- * timeout:        per-request HTTP timeout in seconds; default 120.
- * max_retries:    maximum retry attempts; default 3.
+ * timeout:        per-request HTTP timeout in seconds; default 300.
+ * max_retries:    maximum retry attempts; default 5.
  * retry_delay:    base retry delay in seconds; actual delay = retry_delay x attempt number.
  * extra_headers:  additional HTTP headers, such as the HTTP-Referer required by OpenRouter.
  *                 Record<string, string> is similar to Python's dict[str, str].
@@ -232,12 +232,12 @@ export async function callLlmApi(
     temperature = 0.7,      // Generation randomness; 0 is most deterministic, 1 is more random.
     max_tokens = 50000,     // Maximum output tokens.
     timeout = 300,          // Request timeout in seconds; default 300 seconds, or 5 minutes.
-    max_retries = 3,        // Maximum retry attempts after a failure.
+    max_retries = 5,        // Maximum retry attempts after a failure.
     // retry_delay: seconds to wait between retries.
     // Prefer NETWORK_RETRY_DELAY so operations can tune it without changing code.
-    // ?? "5" means use string "5" when the environment variable is unset.
+    // ?? "60" means use string "60" when the environment variable is unset.
     // parseFloat converts the environment string into a number.
-    retry_delay = parseFloat(process.env["NETWORK_RETRY_DELAY"] ?? "5"),
+    retry_delay = parseFloat(process.env["NETWORK_RETRY_DELAY"] ?? "60"),
     retry_backoff = "linear",
     extra_headers,          // Optional extra HTTP headers; undefined when not provided.
     extra_params,           // Optional extra API parameters; undefined when not provided.

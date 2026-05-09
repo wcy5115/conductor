@@ -46,7 +46,7 @@ steps:
       - type: "llm_call"
         model: "deepseek-v4-flash-nonthinking"
         temperature: 0.2
-        max_tokens: 10000
+        max_tokens: 90000
         validate_json: false
         output_key: "translation_text"
         prompt_template: |

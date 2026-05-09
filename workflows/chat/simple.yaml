@@ -11,5 +11,5 @@ steps:
     model: "{model}"
     prompt: "{user_input}"
     temperature: 0.7
-    max_tokens: 2000
+    max_tokens: 90000
     validate_json: false
