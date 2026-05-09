@@ -39,6 +39,7 @@ vi.mock("../src/cost_calculator.js", () => ({
 }));
 
 import { LLMCallAction } from "../src/workflow_actions/llm_actions";
+import { LLMRetriableError } from "../src/exceptions";
 
 const TEMP_DIR = path.join(process.cwd(), "tests", "_tmp_llm_actions");
 
@@ -114,5 +115,108 @@ describe("LLMCallAction", () => {
     expect(promptText).not.toContain("{item}");
     expect(promptText).not.toContain("{title}");
     expect(messages[0].content[1]).toEqual({ type: "image", path: imagePath });
+  });
+
+  it("passes retry options to text model calls", async () => {
+    mockCallModel.mockResolvedValue({
+      content: "plain response",
+      usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+    });
+
+    const action = new LLMCallAction(
+      "vision",
+      "Say hi to {name}",
+      "answer",
+      "END",
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      3,
+      false,
+      {
+        max_retries: 4,
+        retry_delay: 2,
+        retry_backoff: "fixed",
+      },
+    );
+
+    await action.execute({
+      data: { name: "Ada" },
+      history: [],
+      metadata: {},
+    } as any);
+
+    expect(mockCallModel).toHaveBeenCalledOnce();
+    expect(mockCallModel.mock.calls[0][5]).toEqual({
+      max_retries: 4,
+      retry_delay: 2,
+      retry_backoff: "fixed",
+    });
+  });
+
+  it("passes retry options to multimodal API calls", async () => {
+    const imagePath = path.join(TEMP_DIR, "retry-image.png");
+    fs.writeFileSync(imagePath, "fake image data", "utf-8");
+
+    const action = new LLMCallAction(
+      "vision",
+      "OCR: {item}",
+      "ocr_text",
+      "END",
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      3,
+      false,
+      {
+        max_retries: 5,
+        retry_delay: 1.5,
+        retry_backoff: "exponential",
+      },
+    );
+
+    await action.execute({
+      data: { item: imagePath },
+      history: [],
+      metadata: {},
+    } as any);
+
+    expect(mockCallLlmApi).toHaveBeenCalledOnce();
+    expect(mockCallLlmApi.mock.calls[0][4]).toMatchObject({
+      max_retries: 5,
+      retry_delay: 1.5,
+      retry_backoff: "exponential",
+    });
+  });
+
+  it("throws LLMRetriableError for multimodal retriable API failures", async () => {
+    const imagePath = path.join(TEMP_DIR, "failing-image.png");
+    fs.writeFileSync(imagePath, "fake image data", "utf-8");
+    mockCallLlmApi.mockResolvedValueOnce([
+      "retriable_error",
+      { error: "Request timed out", error_type: "timeout" },
+    ]);
+
+    const action = new LLMCallAction(
+      "vision",
+      "OCR: {item}",
+      "ocr_text",
+      "END",
+      false,
+    );
+
+    await expect(
+      action.execute({
+        data: { item: imagePath },
+        history: [],
+        metadata: {},
+      } as any),
+    ).rejects.toBeInstanceOf(LLMRetriableError);
   });
 });

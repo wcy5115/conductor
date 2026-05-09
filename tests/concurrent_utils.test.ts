@@ -31,7 +31,29 @@ describe("concurrentProcess", () => {
 
     expect(calls).toBe(1);
     expect(stats.failed).toBe(1);
+    expect(stats.fatalFailed).toBe(1);
+    expect(stats.retriableFailed).toBe(0);
     expect(stats.circuitBreakerTriggered).toBe(true);
     expect(stats.items).toHaveLength(1);
+  });
+
+  it("tracks retriable and fatal failure counts separately", async () => {
+    const stats = await concurrentProcess(
+      [1, 2, 3],
+      async (item): Promise<["success" | "retriable_error" | "fatal_error", string]> => {
+        if (item === 1) return ["retriable_error", "temporary"];
+        if (item === 2) return ["fatal_error", "fatal"];
+        return ["success", "ok"];
+      },
+      1,
+      0,
+      "progress",
+      10,
+    );
+
+    expect(stats.success).toBe(1);
+    expect(stats.failed).toBe(2);
+    expect(stats.retriableFailed).toBe(1);
+    expect(stats.fatalFailed).toBe(1);
   });
 });

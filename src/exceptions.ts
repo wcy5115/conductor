@@ -52,6 +52,38 @@ export interface UsageInfo {
 }
 
 // ============================================================
+// LLMRetriableError - LLM/API failure that may succeed later
+// ============================================================
+
+export interface LLMRetriableErrorOptions {
+  errorType?: string;
+  statusCode?: number;
+  causeValue?: unknown;
+}
+
+/**
+ * Error thrown after an LLM/API call exhausts retriable attempts.
+ *
+ * This preserves the existing "retriable_error" classification across action
+ * boundaries. Callers such as ConcurrentAction can inspect this type instead
+ * of parsing strings like "API call failed (retriable)".
+ */
+export class LLMRetriableError extends Error {
+  readonly status = "retriable_error";
+  readonly errorType?: string;
+  readonly statusCode?: number;
+  readonly causeValue?: unknown;
+
+  constructor(message: string, options: LLMRetriableErrorOptions = {}) {
+    super(message);
+    this.name = "LLMRetriableError";
+    this.errorType = options.errorType;
+    this.statusCode = options.statusCode;
+    this.causeValue = options.causeValue;
+  }
+}
+
+// ============================================================
 // LLMValidationError - LLM validation failure
 // ============================================================
 

@@ -164,6 +164,22 @@ describe("callModel", () => {
     expect(options.timeout).toBe(60000);
   });
 
+  it("passes retry options through to chat when provided", async () => {
+    MODEL_MAPPINGS["test-retry-options"] = makeConfig();
+    mockChat.mockResolvedValue({ content: "ok", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+
+    await callModel("test-retry-options", "test prompt", undefined, undefined, undefined, {
+      max_retries: 4,
+      retry_delay: 2,
+      retry_backoff: "exponential",
+    });
+
+    const options = mockChat.mock.calls[0][4];
+    expect(options.max_retries).toBe(4);
+    expect(options.retry_delay).toBe(2);
+    expect(options.retry_backoff).toBe("exponential");
+  });
+
   it("omits timeout from options when no timeout is provided", async () => {
     MODEL_MAPPINGS["test-no-timeout"] = makeConfig();
     mockChat.mockResolvedValue({ content: "ok", usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });

@@ -21,7 +21,7 @@ import { WorkflowContext, StepResult } from "../workflow_engine.js";
 import { BaseAction } from "./base.js";
 // concurrentProcess is the lower-level concurrent runner. ProcessStats records
 // success, failed, skipped counts, and per-item results.
-import { concurrentProcess, ProcessStats } from "../concurrent_utils.js";
+import { concurrentProcess, ProcessStats, ProcessStatus } from "../concurrent_utils.js";
 import {
   getActiveTerminalReporter,
   terminalInternalDebug,
@@ -33,7 +33,7 @@ import {
 import { aggregateCosts, CostResult } from "../cost_calculator.js";
 // LLMValidationError carries cost_info so failed validation attempts can still
 // be included in API cost accounting.
-import { LLMValidationError } from "../exceptions.js";
+import { LLMRetriableError, LLMValidationError } from "../exceptions.js";
 // LLMCallAction is one supported sub-step type.
 import { LLMCallAction } from "./llm_actions.js";
 // ReadFileAction is one supported sub-step type.
@@ -123,6 +123,12 @@ export interface ActionConfig {
   max_tokens?: number;
   /** API timeout in seconds, used only by llm_call. */
   timeout?: number;
+  /** Maximum model/API retry attempts, used only by llm_call. */
+  max_retries?: number;
+  /** Base retry delay in seconds, used only by llm_call. */
+  retry_delay?: number;
+  /** Retry backoff policy, used only by llm_call. */
+  retry_backoff?: "fixed" | "linear" | "exponential";
   /** File encoding, used only by read_file. */
   encoding?: string;
   /** Whether a missing file is allowed, used only by read_file. */
@@ -178,6 +184,9 @@ function _createActionFromConfig(
     const extraConfig: Record<string, unknown> = {};
     if (config.validator) extraConfig["validator"] = config.validator;
     if (config.validator_config) extraConfig["validator_config"] = config.validator_config;
+    if (config.max_retries !== undefined) extraConfig["max_retries"] = config.max_retries;
+    if (config.retry_delay !== undefined) extraConfig["retry_delay"] = config.retry_delay;
+    if (config.retry_backoff !== undefined) extraConfig["retry_backoff"] = config.retry_backoff;
 
     return new LLMCallAction(
       config.model,
@@ -425,10 +434,11 @@ export class ConcurrentAction extends BaseAction {
     // Return format: [ProcessStatus, result]
     //   - "success" + result data
     //   - "skipped" + skip metadata
+    //   - "retriable_error" + error description
     //   - "fatal_error" + error description
     const processItem = async (
       tuple: [unknown, number]
-    ): Promise<["success" | "skipped" | "fatal_error", unknown]> => {
+    ): Promise<[ProcessStatus, unknown]> => {
       const [item, index] = tuple;
       // Per-task timer.
       const taskStart = Date.now();
@@ -594,6 +604,10 @@ export class ConcurrentAction extends BaseAction {
               error_type: e instanceof Error ? e.constructor.name : "Error",
               duration: parseFloat(elapsed),
             }, "ERROR");
+          }
+
+          if (e instanceof LLMRetriableError) {
+            return ["retriable_error", errMsg];
           }
 
           // concurrentProcess records this fatal error in stats.
@@ -835,6 +849,8 @@ export class ConcurrentAction extends BaseAction {
           total: stats.total,
           success: stats.success,
           failed: stats.failed,
+          retriable_failed: stats.retriableFailed,
+          fatal_failed: stats.fatalFailed,
           skipped: stats.skipped,
           circuit_breaker_triggered: stats.circuitBreakerTriggered,
         },
@@ -847,6 +863,8 @@ export class ConcurrentAction extends BaseAction {
           total: stats.total,
           success: stats.success,
           failed: stats.failed,
+          retriable_failed: stats.retriableFailed,
+          fatal_failed: stats.fatalFailed,
           skipped: stats.skipped,
         },
       },

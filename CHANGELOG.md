@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.2] - 2026-05-09
+
+### Fixed
+
+- Preserved exhausted retriable LLM/API failures as `retriable_error` inside
+  concurrent steps instead of flattening them into `fatal_error`.
+- Applied the same `llm_call` retry parameters to both top-level and
+  concurrent LLM calls.
+
+
 ## [0.1.1] - 2026-05-08
 
 ### Changed

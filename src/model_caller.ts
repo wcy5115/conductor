@@ -26,7 +26,8 @@ import * as fs from "fs";
 import * as path from "path";
 import * as yaml from "js-yaml";
 import { fileURLToPath } from "url";
-import { chat, LlmResult, LlmCallOptions } from "./llm_client.js";
+import { chat } from "./llm_client.js";
+import type { LlmResult, LlmCallOptions } from "./llm_client.js";
 import { mockLlmCall, isMockModel, MockConfig } from "./mock_llm.js";
 import {
   terminalInternalInfo,
@@ -320,7 +321,8 @@ export async function callModel(
   prompt: string,
   temperature?: number,
   maxTokens?: number,
-  timeout?: number
+  timeout?: number,
+  options: Pick<LlmCallOptions, "max_retries" | "retry_delay" | "retry_backoff"> = {},
 ): Promise<LlmResult> {
   const entry = MODEL_MAPPINGS[modelAlias];
   if (entry === undefined) {
@@ -368,6 +370,7 @@ export async function callModel(
   const chatOptions: LlmCallOptions = {
     temperature: finalTemperature,
     max_tokens: finalMaxTokens,
+    ...options,
     extra_headers: extraHeaders,
     extra_params: extraParams,
   };

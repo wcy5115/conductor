@@ -32,6 +32,7 @@ vi.mock("../src/cost_calculator.js", () => ({
 // Import the module under test. This must happen after vi.mock.
 import { callLlmApi, chat } from "../src/llm_client";
 import type { Message, LlmResult } from "../src/llm_client";
+import { LLMRetriableError } from "../src/exceptions";
 import { processMessagesWithImages } from "../src/utils.js";
 import { estimateTokensFromText } from "../src/cost_calculator.js";
 
@@ -317,6 +318,27 @@ describe("callLlmApi", () => {
     expect(status).toBe("retriable_error");
     expect((result as Record<string, unknown>).error).toContain("429");
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses exponential retry_backoff when retrying HTTP 429", async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(429, "Rate limit exceeded"))
+      .mockResolvedValueOnce(mockResponse(429, "Rate limit exceeded"))
+      .mockResolvedValueOnce(mockResponse(200, successBody("Recovered")));
+
+    const setTimeoutSpy = vi.mocked(globalThis.setTimeout);
+
+    const [status, result] = await callLlmApi(testMessages, testUrl, testKey, testModel, {
+      max_retries: 3,
+      retry_delay: 2,
+      retry_backoff: "exponential",
+    });
+
+    expect(status).toBe("success");
+    expect((result as LlmResult).content).toBe("Recovered");
+    const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
+    expect(delays).toContain(2000);
+    expect(delays).toContain(4000);
   });
 
   it("HTTP 5xx server error succeeds after retry", async () => {
@@ -623,13 +645,13 @@ describe("chat", () => {
     expect(result.usage.total_tokens).toBe(15);
   });
 
-  it("retriable error throws an Error containing 'retriable'", async () => {
+  it("retriable error throws LLMRetriableError", async () => {
     // Every request returns 429, exhausting retries and producing retriable_error.
     mockFetch.mockResolvedValue(mockResponse(429, "Rate limit"));
 
     await expect(
       chat("Hi", testUrl, testKey, testModel, { max_retries: 1, retry_delay: 0.001 }),
-    ).rejects.toThrow("retriable");
+    ).rejects.toBeInstanceOf(LLMRetriableError);
   });
 
   it("fatal error throws an Error containing 'fatal'", async () => {

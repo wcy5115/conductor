@@ -9,10 +9,11 @@ import fs from "fs";
 import { BaseAction } from "./base.js";
 import { WorkflowContext, StepResult } from "../workflow_engine.js";
 import { callModel, MODEL_MAPPINGS } from "../model_caller.js";
-import { callLlmApi, Message, LlmResult, LlmCallOptions } from "../llm_client.js";
+import { callLlmApi } from "../llm_client.js";
+import type { Message, LlmResult, LlmCallOptions, RetryBackoff } from "../llm_client.js";
 import { calculateCost, CostResult } from "../cost_calculator.js";
 import { validateAndCleanJson } from "../utils.js";
-import { LLMValidationError } from "../exceptions.js";
+import { LLMRetriableError, LLMValidationError } from "../exceptions.js";
 import { BaseValidator } from "../validators/base.js";
 import { getValidator } from "../validators/index.js";
 import {
@@ -47,6 +48,24 @@ const TYPE_CHECKERS: Record<string, (v: unknown) => boolean> = {
   object: (v) => typeof v === "object" && v !== null && !Array.isArray(v),
 };
 
+function parseNumberOption(config: Record<string, unknown>, key: string): number | undefined {
+  const value = config[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`llm_call field '${key}' must be a finite number`);
+  }
+  return value;
+}
+
+function parseRetryBackoffOption(config: Record<string, unknown>): RetryBackoff | undefined {
+  const value = config["retry_backoff"];
+  if (value === undefined) return undefined;
+  if (value === "fixed" || value === "linear" || value === "exponential") {
+    return value;
+  }
+  throw new Error("llm_call field 'retry_backoff' must be one of: fixed, linear, exponential");
+}
+
 // ============================================================
 // LLMCallAction
 // ============================================================
@@ -73,6 +92,12 @@ export class LLMCallAction extends BaseAction {
   readonly maxTokens?: number;
   /** Optional timeout in seconds for long-running calls. */
   readonly timeout?: number;
+  /** Optional maximum model/API retry attempts for retriable failures. */
+  readonly maxRetries?: number;
+  /** Optional base delay between model/API retry attempts, in seconds. */
+  readonly retryDelay?: number;
+  /** Optional model/API retry backoff policy. */
+  readonly retryBackoff?: RetryBackoff;
   /**
    * Whether JSON validation is enabled. This must be passed explicitly.
    */
@@ -164,6 +189,9 @@ export class LLMCallAction extends BaseAction {
     this.temperature = temperature;
     this.maxTokens = maxTokens;
     this.timeout = timeout;
+    this.maxRetries = parseNumberOption(config, "max_retries");
+    this.retryDelay = parseNumberOption(config, "retry_delay");
+    this.retryBackoff = parseRetryBackoffOption(config);
     this.requiredFields = requiredFields;
     // Default nullish jsonRules to an empty object.
     this.jsonRules = jsonRules ?? {};
@@ -174,6 +202,14 @@ export class LLMCallAction extends BaseAction {
     this.validatorConfig = (config["validator_config"] as Record<string, unknown>) ?? {};
     // Read the retry delay from the environment.
     this.jsonRetryDelay = parseFloat(process.env["JSON_RETRY_DELAY"] ?? "2.0");
+  }
+
+  private _llmRetryOptions(): Pick<LlmCallOptions, "max_retries" | "retry_delay" | "retry_backoff"> {
+    const options: Pick<LlmCallOptions, "max_retries" | "retry_delay" | "retry_backoff"> = {};
+    if (this.maxRetries !== undefined) options.max_retries = this.maxRetries;
+    if (this.retryDelay !== undefined) options.retry_delay = this.retryDelay;
+    if (this.retryBackoff !== undefined) options.retry_backoff = this.retryBackoff;
+    return options;
   }
 
   /**
@@ -293,6 +329,7 @@ export class LLMCallAction extends BaseAction {
         const callOptions: LlmCallOptions = {
           temperature: this.temperature ?? modelConfig.temperature ?? 0.7,
           max_tokens: this.maxTokens ?? modelConfig.max_tokens ?? 4000,
+          ...this._llmRetryOptions(),
           extra_params: modelConfig.extra_params ?? {},
         };
         if (this.timeout !== undefined) {
@@ -316,6 +353,15 @@ export class LLMCallAction extends BaseAction {
             errUsage.total_tokens
           );
           this._lastCostInfo = costInfo;
+          if (status === "retriable_error") {
+            throw new LLMRetriableError(`Model call failed: ${errMsg}`, {
+              causeValue: result,
+              errorType:
+                typeof errObj["error_type"] === "string"
+                  ? errObj["error_type"]
+                  : undefined,
+            });
+          }
           throw new Error(`Model call failed: ${errMsg}`);
         }
 
@@ -325,7 +371,14 @@ export class LLMCallAction extends BaseAction {
       } else {
         const prompt = this._renderPromptTemplate(currentPromptTemplate, context);
 
-        const result = await callModel(this.model, prompt, this.temperature, this.maxTokens, this.timeout);
+        const result = await callModel(
+          this.model,
+          prompt,
+          this.temperature,
+          this.maxTokens,
+          this.timeout,
+          this._llmRetryOptions(),
+        );
         resultContent = result.content;
         resultUsage = result.usage;
       }

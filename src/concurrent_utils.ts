@@ -84,6 +84,10 @@ export interface ProcessStats {
   success: number;
   /** Number of failed tasks, including retriable_error and fatal_error. */
   failed: number;
+  /** Number of failed tasks whose final status was retriable_error. */
+  retriableFailed: number;
+  /** Number of failed tasks whose final status was fatal_error. */
+  fatalFailed: number;
   /** Number of skipped tasks. */
   skipped: number;
   /** Whether the circuit breaker was triggered. True means some tasks were not executed after consecutive failures. */
@@ -219,6 +223,8 @@ export async function concurrentProcess<T>(
     total,
     success: 0,
     failed: 0,
+    retriableFailed: 0,
+    fatalFailed: 0,
     skipped: 0,
     circuitBreakerTriggered: false,
     items: [],
@@ -392,6 +398,11 @@ export async function concurrentProcess<T>(
         } else {
           // retriable_error or fatal_error
           stats.failed++;
+          if (status === "retriable_error") {
+            stats.retriableFailed++;
+          } else {
+            stats.fatalFailed++;
+          }
           if (recordFailure()) {
             // recordFailure() returns true when it just triggered the circuit breaker.
             terminalInternalError(`Circuit breaker triggered after ${circuitBreakerThreshold} consecutive failures`);

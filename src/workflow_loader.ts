@@ -388,6 +388,15 @@ export class WorkflowLoader {
     if (config["validator_config"] !== undefined) {
       actionConfig["validator_config"] = config["validator_config"];
     }
+    if (config["max_retries"] !== undefined) {
+      actionConfig["max_retries"] = config["max_retries"];
+    }
+    if (config["retry_delay"] !== undefined) {
+      actionConfig["retry_delay"] = config["retry_delay"];
+    }
+    if (config["retry_backoff"] !== undefined) {
+      actionConfig["retry_backoff"] = config["retry_backoff"];
+    }
 
     return new LLMCallAction(
       config["model"] as string,

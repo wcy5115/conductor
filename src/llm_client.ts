@@ -23,6 +23,7 @@ import { processMessagesWithImages } from "./utils.js";
 // estimateTokensFromText: estimate token counts from text length.
 // This used to live in llm_client.ts, but token and cost logic is centralized in cost_calculator.ts.
 import { estimateTokensFromText } from "./cost_calculator.js";
+import { LLMRetriableError } from "./exceptions.js";
 import {
   terminalInternalDebug,
   terminalInternalError,
@@ -135,6 +136,8 @@ export interface LlmResult {
  */
 export type LlmStatus = "success" | "retriable_error" | "fatal_error";
 
+export type RetryBackoff = "fixed" | "linear" | "exponential";
+
 /**
  * Optional LLM call parameters.
  *
@@ -154,6 +157,7 @@ export interface LlmCallOptions {
   timeout?: number;
   max_retries?: number;
   retry_delay?: number;
+  retry_backoff?: RetryBackoff;
   extra_headers?: Record<string, string>;
   extra_params?: Record<string, unknown>;
 }
@@ -234,9 +238,17 @@ export async function callLlmApi(
     // ?? "5" means use string "5" when the environment variable is unset.
     // parseFloat converts the environment string into a number.
     retry_delay = parseFloat(process.env["NETWORK_RETRY_DELAY"] ?? "5"),
+    retry_backoff = "linear",
     extra_headers,          // Optional extra HTTP headers; undefined when not provided.
     extra_params,           // Optional extra API parameters; undefined when not provided.
   } = options;
+
+  if (!isRetryBackoff(retry_backoff)) {
+    return ["fatal_error", { error: `Invalid retry_backoff: ${String(retry_backoff)}` }];
+  }
+
+  const retryDelayForAttempt = (attempt: number): number =>
+    calculateRetryDelay(retry_delay, attempt + 1, retry_backoff);
 
   // Step 1: preprocess messages, converting local image paths to Base64 Data URLs.
   const processedMessages = processMessagesWithImages(messages);
@@ -419,7 +431,7 @@ export async function callLlmApi(
         // 429 Too Many Requests: rate limit exceeded.
         // Retry after a linearly increasing delay.
         if (attempt < max_retries - 1) {
-          await sleep(retry_delay * (attempt + 1));
+          await sleep(retryDelayForAttempt(attempt));
           continue;
         }
         // Retry attempts are exhausted; let the caller decide whether to retry later.
@@ -427,7 +439,7 @@ export async function callLlmApi(
       } else if (response.status >= 500 && response.status < 600) {
         // 5xx server errors are usually temporary, so retry with linear delay.
         if (attempt < max_retries - 1) {
-          await sleep(retry_delay * (attempt + 1));
+          await sleep(retryDelayForAttempt(attempt));
           continue;
         }
         return ["retriable_error", { error: `Server error (${response.status}): ${responseText}` }];
@@ -435,7 +447,7 @@ export async function callLlmApi(
         // 408 Request Timeout: server-side timeout, separate from client AbortError timeout.
         // Retry after a fixed delay.
         if (attempt < max_retries - 1) {
-          await sleep(retry_delay);
+          await sleep(retryDelayForAttempt(attempt));
           continue;
         }
         return ["retriable_error", { error: `Request timeout (408): ${responseText}` }];
@@ -456,7 +468,7 @@ export async function callLlmApi(
           // AbortError: client-side timeout triggered by AbortController.
           // Retry because the server may be temporarily slow.
           if (attempt < max_retries - 1) {
-            await sleep(retry_delay);
+            await sleep(retryDelayForAttempt(attempt));
             continue;
           }
           return ["retriable_error", { error: "Request timed out" }];
@@ -467,8 +479,9 @@ export async function callLlmApi(
           // Retry because certificate validation can fail due to temporary network issues.
           logger.warning(`SSL certificate error (attempt ${attempt + 1}/${max_retries}): ${msg}`);
           if (attempt < max_retries - 1) {
-            logger.info(`Waiting ${retry_delay} seconds before retry...`);
-            await sleep(retry_delay);
+            const delay = retryDelayForAttempt(attempt);
+            logger.info(`Waiting ${delay} seconds before retry...`);
+            await sleep(delay);
             continue;
           }
           return [
@@ -485,7 +498,7 @@ export async function callLlmApi(
           // Retry because the proxy may be temporarily unavailable.
           logger.warning(`Proxy connection error: ${msg}`);
           if (attempt < max_retries - 1) {
-            await sleep(retry_delay);
+            await sleep(retryDelayForAttempt(attempt));
             continue;
           }
           return ["retriable_error", { error: `Proxy connection failed: ${msg}`, error_type: "proxy_error" }];
@@ -513,7 +526,7 @@ export async function callLlmApi(
           // Retry because this is usually temporary.
           logger.warning(`Chunked transfer error (attempt ${attempt + 1}/${max_retries}): ${msg}`);
           if (attempt < max_retries - 1) {
-            await sleep(retry_delay);
+            await sleep(retryDelayForAttempt(attempt));
             continue;
           }
           return [
@@ -525,7 +538,7 @@ export async function callLlmApi(
         // Generic network errors: DNS failure, connection refused, unreachable network, and similar cases.
         // Retry because network problems are often temporary.
         if (attempt < max_retries - 1) {
-          await sleep(retry_delay);
+          await sleep(retryDelayForAttempt(attempt));
           continue;
         }
         return ["retriable_error", { error: `Request exception: ${msg}` }];
@@ -590,7 +603,13 @@ export async function chat(
       typeof result === "object" && result !== null && "error" in result
         ? result["error"]
         : String(result);
-    throw new Error(`API call failed (retriable): ${errorMsg}`);
+    throw new LLMRetriableError(`API call failed (retriable): ${errorMsg}`, {
+      causeValue: result,
+      errorType:
+        typeof result === "object" && result !== null && "error_type" in result
+          ? String(result["error_type"])
+          : undefined,
+    });
   } else {
     // Fatal error: also throw, but the caller should not retry unchanged.
     const errorMsg =
@@ -604,6 +623,22 @@ export async function chat(
 // ============================================================
 // Utility functions
 // ============================================================
+
+function isRetryBackoff(value: unknown): value is RetryBackoff {
+  return value === "fixed" || value === "linear" || value === "exponential";
+}
+
+function calculateRetryDelay(
+  baseDelaySeconds: number,
+  attemptNumber: number,
+  retryBackoff: RetryBackoff,
+): number {
+  if (retryBackoff === "fixed") return baseDelaySeconds;
+  if (retryBackoff === "exponential") {
+    return baseDelaySeconds * 2 ** Math.max(0, attemptNumber - 1);
+  }
+  return baseDelaySeconds * attemptNumber;
+}
 
 /**
  * Wait asynchronously for the given number of seconds.
