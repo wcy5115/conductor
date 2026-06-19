@@ -88,6 +88,29 @@ describe("EpubExtractAction", () => {
       { index: 4, text: "Delta." },
     ]);
   });
+  it("does not split decimal numbers on the period", async () => {
+    const inputFile = path.join(TEMP_DIR, "decimal-period.txt");
+    fs.writeFileSync(inputFile, "The value is 3.14. Next sentence.", "utf-8");
+
+    const action = new EpubExtractAction(
+      "input",
+      "chunks",
+      10,
+      100,
+      "NEXT",
+      "Extract"
+    );
+
+    const result = await action.execute({
+      data: { input: inputFile },
+      history: [],
+      metadata: {},
+    } as any);
+    expect(result.data["chunks"]).toEqual([
+      { index: 1, text: "The value is 3.14." },
+      { index: 2, text: "Next sentence." },
+    ]);
+  });
 });
 
 describe("MergeToEpubAction", () => {

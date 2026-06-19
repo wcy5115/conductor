@@ -265,7 +265,7 @@ function splitBySentences(
   emergencyThreshold: number
 ): string[] {
   // Use a capture group so split keeps the sentence-ending punctuation.
-  const SENTENCE_ENDINGS = /([。！？.?!؟।॥])/;
+  const SENTENCE_ENDINGS = /([。！？?!؟।॥]|(?<!\d)\.|\.(?!\d))/u;
   const sentences = fullText.split(SENTENCE_ENDINGS);
 
   // Reattach each delimiter to the preceding sentence.
