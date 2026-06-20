@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Prevented EPUB text extraction from splitting sentence chunks inside decimal
+  numbers such as `3.14`.
+
+
 ## [0.1.2] - 2026-05-09
 
 ### Changed
