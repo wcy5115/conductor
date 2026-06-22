@@ -1,7 +1,7 @@
 /**
  * 代码同步检查脚本
  *
- * 用途：确保 src/（中文注释版）与 docs/src-en/（英文注释版）的实际代码完全一致。
+ * 用途：确保工作代码与 docs/code-explained/ 中的详细讲解版代码完全一致。
  * 原理：用 TypeScript 编译器 API 解析源码，去除所有注释后逐行对比纯代码。
  *
  * 运行方式：npx tsx scripts/check-code-sync.ts
@@ -29,13 +29,14 @@ const __dirname = path.dirname(__filename);
 
 // 项目根目录（脚本位于 scripts/ 下，所以往上一级就是项目根）
 const PROJECT_ROOT = path.resolve(__dirname, "..");
+const CODE_EXPLAINED_ROOT = path.join(PROJECT_ROOT, "docs", "code-explained");
 // 需要检查同步的目录配对列表
-// 每一对：[中文注释目录, 英文注释目录, 显示用的标签]
-// 左边是项目中的原始目录，右边是 docs/ 下对应的英文注释副本
+// 每一对：[工作代码目录, 详细讲解版目录, 显示用的标签]
+// 左边是项目中的真实代码，右边是 docs/code-explained/ 下对应的讲解副本
 const DIR_PAIRS: Array<[string, string, string]> = [
-  [path.join(PROJECT_ROOT, "src"), path.join(PROJECT_ROOT, "docs", "src-en"), "src"],
-  [path.join(PROJECT_ROOT, "tests"), path.join(PROJECT_ROOT, "docs", "tests-en"), "tests"],
-  [path.join(PROJECT_ROOT, "scripts"), path.join(PROJECT_ROOT, "docs", "scripts-en"), "scripts"],
+  [path.join(PROJECT_ROOT, "src"), path.join(CODE_EXPLAINED_ROOT, "src"), "src"],
+  [path.join(PROJECT_ROOT, "tests"), path.join(CODE_EXPLAINED_ROOT, "tests"), "tests"],
+  [path.join(PROJECT_ROOT, "scripts"), path.join(CODE_EXPLAINED_ROOT, "scripts"), "scripts"],
 ];
 
 // ============================================================
@@ -57,7 +58,7 @@ function scanTsFiles(dir: string, baseDir: string): string[] {
   // 结果数组，存放所有找到的 .ts 文件相对路径
   const results: string[] = [];
 
-  // 如果目录不存在，直接返回空数组（docs/src-en/ 可能尚未创建）
+  // 如果目录不存在，直接返回空数组（某些讲解版目录可能尚未创建）
   if (!fs.existsSync(dir)) {
     return results;
   }
@@ -214,7 +215,7 @@ function stripComments(code: string, fileName: string): string {
  *   2. 每行 trim（去除首尾空白）
  *   3. 过滤空行
  *
- * 这样即使中英文注释的行数不同，只要纯代码一致就不会产生假阳性。
+ * 这样即使详细讲解注释的行数不同，只要纯代码一致就不会产生假阳性。
  *
  * @param code - 去除注释后的代码
  * @returns 规范化后的非空行数组
@@ -234,21 +235,21 @@ function normalizeCode(code: string): string[] {
  * 比较两个文件去除注释后的纯代码是否一致
  *
  * @param relativePath - 文件的相对路径（用于显示）
- * @param srcCode - 中文注释版的原始源码
- * @param enCode - 英文注释版的原始源码
+ * @param sourceCode - 工作代码的原始源码
+ * @param explainedCode - 详细讲解版的原始源码
  * @returns true = 一致，false = 有差异
  */
 function compareFiles(
   relativePath: string,
-  srcCode: string,
-  enCode: string,
+  sourceCode: string,
+  explainedCode: string,
 ): boolean {
   // 分别去除注释并规范化
-  const srcLines = normalizeCode(stripComments(srcCode, relativePath));
-  const enLines = normalizeCode(stripComments(enCode, relativePath));
+  const sourceLines = normalizeCode(stripComments(sourceCode, relativePath));
+  const explainedLines = normalizeCode(stripComments(explainedCode, relativePath));
 
   // 如果规范化后的行数组完全相同，说明代码一致
-  if (srcLines.length === enLines.length && srcLines.every((line, i) => line === enLines[i])) {
+  if (sourceLines.length === explainedLines.length && sourceLines.every((line, i) => line === explainedLines[i])) {
     return true;
   }
 
@@ -256,22 +257,22 @@ function compareFiles(
   console.log(`\n  差异详情：`);
 
   // 取两边行数的最大值，逐行对比
-  const maxLen = Math.max(srcLines.length, enLines.length);
+  const maxLen = Math.max(sourceLines.length, explainedLines.length);
   // diffCount 用于限制输出的差异行数，避免刷屏
   let diffCount = 0;
   const MAX_DIFF_LINES = 10;
 
   for (let i = 0; i < maxLen; i++) {
-    const srcLine = srcLines[i] ?? "(无)";  // 如果 src 行数较少，显示 "(无)"
-    const enLine = enLines[i] ?? "(无)";    // 如果 en 行数较少，显示 "(无)"
+    const sourceLine = sourceLines[i] ?? "(无)";       // 如果工作代码行数较少，显示 "(无)"
+    const explainedLine = explainedLines[i] ?? "(无)"; // 如果讲解版行数较少，显示 "(无)"
 
-    if (srcLine !== enLine) {
+    if (sourceLine !== explainedLine) {
       diffCount++;
       if (diffCount <= MAX_DIFF_LINES) {
         // 显示差异行的行号和两边内容
         console.log(`    行 ${i + 1}:`);
-        console.log(`      src:    ${srcLine}`);
-        console.log(`      src-en: ${enLine}`);
+        console.log(`      source:    ${sourceLine}`);
+        console.log(`      explained: ${explainedLine}`);
       }
     }
   }
@@ -295,15 +296,15 @@ function main(): void {
   let hasError = false;
 
   // 逐个检查每对目录
-  for (const [cnDir, enDir, label] of DIR_PAIRS) {
-    console.log(`--- ${label}/ ↔ docs/${label}-en/ ---`);
+  for (const [sourceDir, explainedDir, label] of DIR_PAIRS) {
+    console.log(`--- ${label}/ ↔ docs/code-explained/${label}/ ---`);
 
     // 扫描两个目录下的所有 .ts 文件
-    const cnFiles = new Set(scanTsFiles(cnDir, cnDir));
-    const enFiles = new Set(scanTsFiles(enDir, enDir));
+    const sourceFiles = new Set(scanTsFiles(sourceDir, sourceDir));
+    const explainedFiles = new Set(scanTsFiles(explainedDir, explainedDir));
 
     // 合并两边的文件路径，用于统一遍历
-    const allFiles = new Set([...cnFiles, ...enFiles]);
+    const allFiles = new Set([...sourceFiles, ...explainedFiles]);
 
     if (allFiles.size === 0) {
       console.log("  (无 .ts 文件，跳过)\n");
@@ -317,28 +318,28 @@ function main(): void {
       // 将相对路径中的反斜杠统一为正斜杠（Windows 兼容）
       const displayPath = relativePath.replace(/\\/g, "/");
 
-      const inCn = cnFiles.has(relativePath);
-      const inEn = enFiles.has(relativePath);
+      const inSource = sourceFiles.has(relativePath);
+      const inExplained = explainedFiles.has(relativePath);
 
-      if (!inCn) {
-        // 文件只存在于英文目录，中文目录中缺失
-        console.log(`[缺失] ${displayPath} — 仅存在于 ${label}-en/，${label}/ 中缺失`);
+      if (!inSource) {
+        // 文件只存在于讲解版目录，工作代码目录中缺失
+        console.log(`[缺失] ${displayPath} — 仅存在于 docs/code-explained/${label}/，${label}/ 中缺失`);
         hasError = true;
         continue;
       }
 
-      if (!inEn) {
-        // 文件只存在于中文目录，英文目录中缺失
-        console.log(`[缺失] ${displayPath} — 仅存在于 ${label}/，${label}-en/ 中缺失`);
+      if (!inExplained) {
+        // 文件只存在于工作代码目录，讲解版目录中缺失
+        console.log(`[缺失] ${displayPath} — 仅存在于 ${label}/，docs/code-explained/${label}/ 中缺失`);
         hasError = true;
         continue;
       }
 
       // 两边都有该文件，读取内容并比较
-      const cnCode = fs.readFileSync(path.join(cnDir, relativePath), "utf-8");
-      const enCode = fs.readFileSync(path.join(enDir, relativePath), "utf-8");
+      const sourceCode = fs.readFileSync(path.join(sourceDir, relativePath), "utf-8");
+      const explainedCode = fs.readFileSync(path.join(explainedDir, relativePath), "utf-8");
 
-      const isMatch = compareFiles(relativePath, cnCode, enCode);
+      const isMatch = compareFiles(relativePath, sourceCode, explainedCode);
 
       if (isMatch) {
         console.log(`[一致] ${displayPath}`);
