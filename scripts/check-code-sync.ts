@@ -1,38 +1,41 @@
 /**
- * 代码同步检查脚本
+ * Code sync checker.
  *
- * 用途：确保工作代码与 docs/code-explained/ 中的详细讲解版代码完全一致。
- * 原理：用 TypeScript 编译器 API 解析源码，去除所有注释后逐行对比纯代码。
+ * Purpose: make sure working code and the detailed copies in
+ * docs/code-explained/ contain the same executable code.
  *
- * 运行方式：npx tsx scripts/check-code-sync.ts
- * 退出码：0 = 全部一致，1 = 有差异或缺失文件
+ * Principle: use the TypeScript compiler API to parse source code, remove all
+ * comments, normalize the remaining code, and compare it line by line.
+ *
+ * Run with: npx tsx scripts/check-code-sync.ts
+ * Exit codes: 0 = all code matches, 1 = differences or missing files exist
  */
 
-// fs — Node.js 文件系统模块，用于读取文件和目录
+// fs: Node.js file-system module for reading files and directories.
 import * as fs from "fs";
-// path — Node.js 路径模块，用于拼接、解析文件路径
+// path: Node.js path module for joining and resolving file paths.
 import * as path from "path";
-// url — Node.js URL 模块，用于将 import.meta.url 转换为文件路径（ESM 中没有 __dirname）
+// url: converts import.meta.url into a local file path. ESM has no __dirname.
 import { fileURLToPath } from "url";
-// ts — TypeScript 编译器 API，用于解析源码 AST 并定位注释区间
+// ts: TypeScript compiler API for parsing source code and locating comments.
 import * as ts from "typescript";
 
 // ============================================================
-// 常量定义
+// Constants
 // ============================================================
 
-// ESM 模块中没有 __dirname，需要通过 import.meta.url 手动构造
-// import.meta.url 返回形如 "file:///D:/project/scripts/check-code-sync.ts" 的 URL
-// fileURLToPath 将其转为本地路径，path.dirname 取其目录部分
+// ESM modules do not provide __dirname, so we build it from import.meta.url.
+// import.meta.url returns a URL like "file:///D:/project/scripts/check-code-sync.ts".
+// fileURLToPath converts that URL into a local path, and path.dirname keeps its directory.
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 项目根目录（脚本位于 scripts/ 下，所以往上一级就是项目根）
+// Project root. This script lives under scripts/, so one level up is the root.
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const CODE_EXPLAINED_ROOT = path.join(PROJECT_ROOT, "docs", "code-explained");
-// 需要检查同步的目录配对列表
-// 每一对：[工作代码目录, 详细讲解版目录, 显示用的标签]
-// 左边是项目中的真实代码，右边是 docs/code-explained/ 下对应的讲解副本
+// Directory pairs to compare.
+// Each pair is [working-code directory, explained-code directory, display label].
+// The left side is real project code; the right side is the matching explained copy.
 const DIR_PAIRS: Array<[string, string, string]> = [
   [path.join(PROJECT_ROOT, "src"), path.join(CODE_EXPLAINED_ROOT, "src"), "src"],
   [path.join(PROJECT_ROOT, "tests"), path.join(CODE_EXPLAINED_ROOT, "tests"), "tests"],
@@ -40,42 +43,44 @@ const DIR_PAIRS: Array<[string, string, string]> = [
 ];
 
 // ============================================================
-// 递归扫描目录，返回所有 .ts 文件的相对路径
+// Recursively scan directories
 // ============================================================
 
 /**
- * 递归扫描指定目录下的所有 .ts 文件
+ * Recursively scan a directory and return all .ts file paths relative to baseDir.
  *
- * @param dir - 要扫描的目录绝对路径
- * @param baseDir - 基准目录，用于计算相对路径
- * @returns 相对路径数组，如 ["index.ts", "core/logging.ts"]
+ * @param dir - Absolute directory path to scan.
+ * @param baseDir - Base directory used to calculate relative paths.
+ * @returns Relative paths such as ["index.ts", "core/logging.ts"].
  *
- * 示例：
+ * Example:
  *   scanTsFiles("/project/src", "/project/src")
- *   → ["index.ts", "core/logging.ts", "utils.ts", ...]
+ *   -> ["index.ts", "core/logging.ts", "utils.ts", ...]
  */
 function scanTsFiles(dir: string, baseDir: string): string[] {
-  // 结果数组，存放所有找到的 .ts 文件相对路径
+  // Collect all relative .ts file paths found under dir.
   const results: string[] = [];
 
-  // 如果目录不存在，直接返回空数组（某些讲解版目录可能尚未创建）
+  // Missing directories are allowed because some explained-code folders may
+  // not have been created yet.
   if (!fs.existsSync(dir)) {
     return results;
   }
 
-  // 读取目录下所有条目（文件和子目录）
+  // Read both files and subdirectories.
   const entries = fs.readdirSync(dir, { withFileTypes: true });
 
   for (const entry of entries) {
-    // 拼接条目的完整路径
+    // Build the full path for the current entry.
     const fullPath = path.join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      // 如果是子目录，递归扫描并合并结果
+      // Recurse into subdirectories and merge their results.
       results.push(...scanTsFiles(fullPath, baseDir));
     } else if (entry.isFile() && entry.name.endsWith(".ts")) {
-      // 如果是 .ts 文件，计算相对路径并加入结果
-      // path.relative 示例：path.relative("/project/src", "/project/src/core/logging.ts") → "core/logging.ts"
+      // For .ts files, calculate the relative path and add it to the result.
+      // Example: path.relative("/project/src", "/project/src/core/logging.ts")
+      // -> "core/logging.ts"
       results.push(path.relative(baseDir, fullPath));
     }
   }
@@ -84,36 +89,36 @@ function scanTsFiles(dir: string, baseDir: string): string[] {
 }
 
 // ============================================================
-// 用 TypeScript 编译器 API 去除源码中的所有注释
+// Strip comments with the TypeScript compiler API
 // ============================================================
 
 /**
- * 收集源码文本中所有注释的起止位置区间
+ * Collect the start and end ranges for all comments in the source text.
  *
- * 原理：TypeScript 的 `getLeadingCommentRanges` 和 `getTrailingCommentRanges`
- * 分别返回节点前方和后方的注释区间（包括 // 行注释和 /* * / 块注释）。
- * 我们递归遍历 AST 的每个节点，收集所有注释的 [pos, end] 区间。
+ * TypeScript's getLeadingCommentRanges and getTrailingCommentRanges report
+ * comments before and after a node, including // line comments and block
+ * comments. We walk every AST node and collect all [pos, end] ranges.
  *
- * @param sourceFile - ts.createSourceFile 解析得到的 AST
- * @param text - 原始源码文本
- * @returns 注释区间数组 [{pos, end}, ...]
+ * @param sourceFile - AST returned by ts.createSourceFile.
+ * @param text - Original source text.
+ * @returns Comment ranges as [{pos, end}, ...].
  */
 function collectCommentRanges(
   sourceFile: ts.SourceFile,
   text: string,
 ): Array<{ pos: number; end: number }> {
-  // 存放所有注释区间
+  // Store every comment range found during traversal.
   const ranges: Array<{ pos: number; end: number }> = [];
 
   /**
-   * 递归遍历 AST 节点，收集每个节点前后的注释区间
+   * Walk AST nodes recursively and collect comment ranges around each node.
    *
-   * 为什么用 ts.forEachChild 而不是 ts.visitEachChild？
-   *   forEachChild 只遍历直接子节点，不需要 visitor 回调返回新节点，
-   *   适合"只读遍历"场景，更简洁。
+   * We use ts.forEachChild instead of ts.visitEachChild because this is a
+   * read-only traversal. We only need to visit child nodes, not return updated
+   * nodes from a visitor callback.
    */
   function visit(node: ts.Node): void {
-    // 获取节点前方的注释（如函数前的 JSDoc、行前的 // 注释）
+    // Comments before the node, such as JSDoc before a function.
     const leading = ts.getLeadingCommentRanges(text, node.getFullStart());
     if (leading) {
       for (const range of leading) {
@@ -121,7 +126,7 @@ function collectCommentRanges(
       }
     }
 
-    // 获取节点后方的注释（如行尾的 // 注释）
+    // Comments after the node, such as an end-of-line // comment.
     const trailing = ts.getTrailingCommentRanges(text, node.getEnd());
     if (trailing) {
       for (const range of trailing) {
@@ -129,7 +134,7 @@ function collectCommentRanges(
       }
     }
 
-    // 递归访问所有子节点
+    // Continue walking child nodes.
     ts.forEachChild(node, visit);
   }
 
@@ -138,26 +143,26 @@ function collectCommentRanges(
 }
 
 /**
- * 从源码文本中去除所有注释，返回纯代码文本
+ * Remove all comments from source text and return code-only text.
  *
- * 步骤：
- *   1. 用 ts.createSourceFile 将源码解析为 AST
- *   2. 收集所有注释的 [pos, end] 区间
- *   3. 按位置排序、去重（不同节点可能报告相同的注释区间）
- *   4. 从原始文本中删除这些区间，拼接剩余部分
+ * Steps:
+ *   1. Parse the source with ts.createSourceFile.
+ *   2. Collect all comment [pos, end] ranges.
+ *   3. Sort and deduplicate ranges. Different nodes may report the same range.
+ *   4. Remove those ranges from the original text and join the remaining parts.
  *
- * @param code - 原始 TypeScript 源码
- * @param fileName - 文件名（仅用于 AST 解析的诊断信息）
- * @returns 去除注释后的纯代码
+ * @param code - Original TypeScript source code.
+ * @param fileName - File name, used only for parser diagnostics.
+ * @returns Code with comments removed.
  *
- * 示例：
- *   stripComments("const x = 1; // 这是注释", "a.ts")
- *   → "const x = 1; "
+ * Example:
+ *   stripComments("const x = 1; // comment", "a.ts")
+ *   -> "const x = 1; "
  */
 function stripComments(code: string, fileName: string): string {
-  // 第一步：将源码解析为 AST（抽象语法树）
-  // ScriptTarget.Latest 表示使用最新的 ES 标准解析
-  // true 表示 setParentNodes，让每个节点都有 parent 引用
+  // Parse source into an AST.
+  // ScriptTarget.Latest uses the latest ECMAScript grammar supported by TypeScript.
+  // The true argument enables setParentNodes so nodes keep parent references.
   const sourceFile = ts.createSourceFile(
     fileName,
     code,
@@ -165,36 +170,37 @@ function stripComments(code: string, fileName: string): string {
     true,
   );
 
-  // 第二步：收集所有注释区间
+  // Collect all comment ranges.
   const ranges = collectCommentRanges(sourceFile, code);
 
-  // 第三步：按起始位置排序，便于后续从前到后处理
+  // Sort ranges by start position so later processing can move left to right.
   ranges.sort((a, b) => a.pos - b.pos);
 
-  // 去重：相同区间只保留一次
-  // 为什么会有重复？因为相邻节点可能共享同一个注释区间
-  // 例如：// 注释\nconst a = 1; 中，注释既是下一个节点的 leading，也可能被其他节点报告
+  // Deduplicate identical ranges.
+  // Duplicates can happen because adjacent nodes may share the same comment
+  // range. For example, a comment before const a = 1 may be reported as leading
+  // trivia for the next node and also by nearby nodes.
   const unique: Array<{ pos: number; end: number }> = [];
   for (const r of ranges) {
-    // 如果和上一个区间不同，才加入（利用已排序的特性，只需比较相邻的）
+    // Because the list is sorted, only the previous range needs comparison.
     if (unique.length === 0 || unique[unique.length - 1].pos !== r.pos || unique[unique.length - 1].end !== r.end) {
       unique.push(r);
     }
   }
 
-  // 第四步：从原始文本中删除注释区间，拼接剩余部分
-  // cursor 记录当前处理到的位置，跳过注释区间
+  // Remove comment ranges from the original text and join the remaining parts.
+  // cursor tracks the current read position while skipping comment ranges.
   const parts: string[] = [];
   let cursor = 0;
   for (const r of unique) {
     if (r.pos > cursor) {
-      // 将注释前的代码文本加入结果
+      // Keep the code text before the comment.
       parts.push(code.slice(cursor, r.pos));
     }
-    // 跳过注释区间，将 cursor 移到注释结束位置
+    // Skip the comment range.
     cursor = r.end;
   }
-  // 别忘了最后一段（最后一个注释之后的代码）
+  // Keep the final code segment after the last comment.
   if (cursor < code.length) {
     parts.push(code.slice(cursor));
   }
@@ -203,74 +209,75 @@ function stripComments(code: string, fileName: string): string {
 }
 
 // ============================================================
-// 规范化代码文本：消除注释位置差异导致的空白差异
+// Normalize code text
 // ============================================================
 
 /**
- * 规范化代码文本
+ * Normalize code text.
  *
- * 去除注释后，原来注释所在的位置可能留下多余的空行或空白。
- * 规范化步骤：
- *   1. 按行分割
- *   2. 每行 trim（去除首尾空白）
- *   3. 过滤空行
+ * After comments are removed, their old positions may leave extra blank lines
+ * or whitespace. Normalization:
+ *   1. Split into lines.
+ *   2. Trim each line.
+ *   3. Remove empty lines.
  *
- * 这样即使详细讲解注释的行数不同，只要纯代码一致就不会产生假阳性。
+ * This avoids false positives when explained comments use different line counts
+ * while the executable code is still identical.
  *
- * @param code - 去除注释后的代码
- * @returns 规范化后的非空行数组
+ * @param code - Code after comments have been removed.
+ * @returns Normalized non-empty lines.
  */
 function normalizeCode(code: string): string[] {
   return code
-    .split("\n")             // 按换行符分割为行数组
-    .map((line) => line.trim())   // 每行去除首尾空白
-    .filter((line) => line !== ""); // 过滤掉空行
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
 }
 
 // ============================================================
-// 比较两个文件的纯代码，输出差异报告
+// Compare code-only file contents
 // ============================================================
 
 /**
- * 比较两个文件去除注释后的纯代码是否一致
+ * Compare two files after comments have been removed.
  *
- * @param relativePath - 文件的相对路径（用于显示）
- * @param sourceCode - 工作代码的原始源码
- * @param explainedCode - 详细讲解版的原始源码
- * @returns true = 一致，false = 有差异
+ * @param relativePath - Relative path, used for display.
+ * @param sourceCode - Original working source code.
+ * @param explainedCode - Original explained-copy source code.
+ * @returns true if code matches, false if it differs.
  */
 function compareFiles(
   relativePath: string,
   sourceCode: string,
   explainedCode: string,
 ): boolean {
-  // 分别去除注释并规范化
+  // Strip comments and normalize both sides.
   const sourceLines = normalizeCode(stripComments(sourceCode, relativePath));
   const explainedLines = normalizeCode(stripComments(explainedCode, relativePath));
 
-  // 如果规范化后的行数组完全相同，说明代码一致
+  // Exact line equality means the executable code matches.
   if (sourceLines.length === explainedLines.length && sourceLines.every((line, i) => line === explainedLines[i])) {
     return true;
   }
 
-  // 有差异，输出详细报告
-  console.log(`\n  差异详情：`);
+  // Print a focused diff report.
+  console.log("\n  Difference details:");
 
-  // 取两边行数的最大值，逐行对比
+  // Compare line by line up to the longer side.
   const maxLen = Math.max(sourceLines.length, explainedLines.length);
-  // diffCount 用于限制输出的差异行数，避免刷屏
+  // Limit displayed differences to avoid flooding the terminal.
   let diffCount = 0;
   const MAX_DIFF_LINES = 10;
 
   for (let i = 0; i < maxLen; i++) {
-    const sourceLine = sourceLines[i] ?? "(无)";       // 如果工作代码行数较少，显示 "(无)"
-    const explainedLine = explainedLines[i] ?? "(无)"; // 如果讲解版行数较少，显示 "(无)"
+    const sourceLine = sourceLines[i] ?? "(none)";
+    const explainedLine = explainedLines[i] ?? "(none)";
 
     if (sourceLine !== explainedLine) {
       diffCount++;
       if (diffCount <= MAX_DIFF_LINES) {
-        // 显示差异行的行号和两边内容
-        console.log(`    行 ${i + 1}:`);
+        // Show line number and content from both sides.
+        console.log(`    Line ${i + 1}:`);
         console.log(`      source:    ${sourceLine}`);
         console.log(`      explained: ${explainedLine}`);
       }
@@ -278,90 +285,90 @@ function compareFiles(
   }
 
   if (diffCount > MAX_DIFF_LINES) {
-    console.log(`    ... 还有 ${diffCount - MAX_DIFF_LINES} 处差异未显示`);
+    console.log(`    ... ${diffCount - MAX_DIFF_LINES} more differences not shown`);
   }
 
-  console.log(`  共 ${diffCount} 处差异`);
+  console.log(`  Total differences: ${diffCount}`);
   return false;
 }
 
 // ============================================================
-// 主函数：扫描、配对、比较、输出报告
+// Main flow
 // ============================================================
 
 function main(): void {
-  console.log("=== 代码同步检查 ===\n");
+  console.log("=== Code Sync Check ===\n");
 
-  // hasError 标记是否有任何差异或缺失，决定最终退出码
+  // hasError controls the final exit code.
   let hasError = false;
 
-  // 逐个检查每对目录
+  // Check each source/explained directory pair.
   for (const [sourceDir, explainedDir, label] of DIR_PAIRS) {
-    console.log(`--- ${label}/ ↔ docs/code-explained/${label}/ ---`);
+    console.log(`--- ${label}/ <-> docs/code-explained/${label}/ ---`);
 
-    // 扫描两个目录下的所有 .ts 文件
+    // Scan all .ts files on both sides.
     const sourceFiles = new Set(scanTsFiles(sourceDir, sourceDir));
     const explainedFiles = new Set(scanTsFiles(explainedDir, explainedDir));
 
-    // 合并两边的文件路径，用于统一遍历
+    // Merge file paths from both sides so missing files are also reported.
     const allFiles = new Set([...sourceFiles, ...explainedFiles]);
 
     if (allFiles.size === 0) {
-      console.log("  (无 .ts 文件，跳过)\n");
+      console.log("  (no .ts files, skipped)\n");
       continue;
     }
 
-    // 按字母顺序排列，方便阅读
+    // Sort alphabetically for stable, readable output.
     const sortedFiles = [...allFiles].sort();
 
     for (const relativePath of sortedFiles) {
-      // 将相对路径中的反斜杠统一为正斜杠（Windows 兼容）
+      // Use forward slashes in output for Windows compatibility and readability.
       const displayPath = relativePath.replace(/\\/g, "/");
 
       const inSource = sourceFiles.has(relativePath);
       const inExplained = explainedFiles.has(relativePath);
 
       if (!inSource) {
-        // 文件只存在于讲解版目录，工作代码目录中缺失
-        console.log(`[缺失] ${displayPath} — 仅存在于 docs/code-explained/${label}/，${label}/ 中缺失`);
+        // Exists only in the explained copy.
+        console.log(`[missing] ${displayPath} exists only in docs/code-explained/${label}/; missing from ${label}/`);
         hasError = true;
         continue;
       }
 
       if (!inExplained) {
-        // 文件只存在于工作代码目录，讲解版目录中缺失
-        console.log(`[缺失] ${displayPath} — 仅存在于 ${label}/，docs/code-explained/${label}/ 中缺失`);
+        // Exists only in working code.
+        console.log(`[missing] ${displayPath} exists only in ${label}/; missing from docs/code-explained/${label}/`);
         hasError = true;
         continue;
       }
 
-      // 两边都有该文件，读取内容并比较
+      // Both sides have the file, so read and compare their code-only content.
       const sourceCode = fs.readFileSync(path.join(sourceDir, relativePath), "utf-8");
       const explainedCode = fs.readFileSync(path.join(explainedDir, relativePath), "utf-8");
 
       const isMatch = compareFiles(relativePath, sourceCode, explainedCode);
 
       if (isMatch) {
-        console.log(`[一致] ${displayPath}`);
+        console.log(`[match] ${displayPath}`);
       } else {
-        console.log(`[差异] ${displayPath}`);
+        console.log(`[diff] ${displayPath}`);
         hasError = true;
       }
     }
 
-    console.log(); // 目录对之间空一行
+    console.log();
   }
 
-  // 输出汇总
-  console.log("=== 检查完成 ===");
+  // Summary and process exit code.
+  console.log("=== Check Complete ===");
   if (hasError) {
-    console.log("结果：存在差异或缺失文件，请检查上方报告。");
+    console.log("Result: differences or missing files exist. Check the report above.");
     process.exit(1);
   } else {
-    console.log("结果：所有文件代码一致。");
+    console.log("Result: all code matches.");
     process.exit(0);
   }
 }
 
-// 执行主函数
+// Run the script.
 main();
