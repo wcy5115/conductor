@@ -83,6 +83,12 @@ describe("validateAndCleanJson", () => {
     expect(() => validateAndCleanJson("{invalid}")).toThrow();
     expect(() => validateAndCleanJson("not json at all")).toThrow();
   });
+
+  it("repairs unescaped quotes inside JSON string values", () => {
+    const input = '{"message": "He said, "Hello!" and left."}';
+    const result = validateAndCleanJson(input);
+    expect(result).toEqual({ message: 'He said, "Hello!" and left.' });
+  });
 });
 
 describe("saveToFile", () => {

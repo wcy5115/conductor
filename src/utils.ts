@@ -220,10 +220,12 @@ export function processMessagesWithImages(
  * Validate and clean JSON content with basic preprocessing only.
  *
  * Behavior:
+ * - Try direct parsing first when the LLM already returned valid JSON.
  * - Remove Markdown code fences.
  * - Extract the JSON portion.
  * - Escape control characters, such as real newlines and tabs.
  * - Fix invalid escape sequences, such as LaTeX commands.
+ * - Fix unescaped quotation marks inside string values.
  * - Parse JSON.
  *
  * Note: this function only handles basic JSON format cleanup. Use the
@@ -247,7 +249,16 @@ export function validateAndCleanJson(
     throw new Error("Input text is empty");
   }
 
-  // 3. Remove Markdown code fences.
+  // 3. Fast path: most LLM responses are already valid JSON, so parse before
+  // applying repair heuristics.
+  try {
+    const data = JSON.parse(text) as Record<string, unknown> | unknown[];
+    return data;
+  } catch {
+    // Fall through to cleanup/repair for malformed LLM JSON.
+  }
+
+  // 4. Remove Markdown code fences.
   if (text.includes("```")) {
     const mdMatch = /```(?:json)?\s*\n(.*?)\n```/is.exec(text);
     if (mdMatch) {
@@ -257,19 +268,22 @@ export function validateAndCleanJson(
     }
   }
 
-  // 4. Extract the JSON portion.
+  // 5. Extract the JSON portion.
   const jsonMatch = /[{[].*[}\]]/s.exec(text);
   if (jsonMatch) {
     text = jsonMatch[0];
   }
 
-  // 5. Escape control characters.
+  // 6. Escape control characters.
   text = escapeControlChars(text);
 
-  // 6. Fix invalid escape sequences.
+  // 7. Fix invalid escape sequences.
   text = fixInvalidEscapes(text);
 
-  // 7. Parse JSON.
+  // 8. Fix unescaped quotation marks that appear inside JSON string values.
+  text = fixUnescapedQuotes(text);
+
+  // 9. Parse JSON.
   try {
     const data = JSON.parse(text) as Record<string, unknown> | unknown[];
     logger.debug(
@@ -337,4 +351,63 @@ function escapeControlChars(jsonText: string): string {
  */
 function fixInvalidEscapes(jsonText: string): string {
   return jsonText.replace(/(?<!\\)\\(?!["\\/bfnrtu])/g, "\\\\");
+}
+
+/**
+ * Escape quotation marks that the LLM placed inside JSON string values.
+ *
+ * Example:
+ *   { "message": "He said "hello" today" }
+ * becomes:
+ *   { "message": "He said \"hello\" today" }
+ */
+function fixUnescapedQuotes(text: string): string {
+  const result: string[] = [];
+  let inString = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]!;
+    const isEscaped = i > 0 && text[i - 1] === "\\";
+
+    if (char === '"') {
+      if (isEscaped) {
+        result.push(char);
+        continue;
+      }
+
+      if (!inString) {
+        inString = true;
+        result.push(char);
+        continue;
+      }
+
+      let nextIndex = i + 1;
+      while (nextIndex < text.length && /\s/.test(text[nextIndex]!)) {
+        nextIndex++;
+      }
+      const nextChar = text[nextIndex]!;
+
+      // A quote followed by JSON structure closes the string. Otherwise, keep
+      // the quote as string content by escaping it.
+      const closeString =
+        nextChar === ":" ||
+        nextChar === "," ||
+        nextChar === "}" ||
+        nextChar === "]";
+
+      if (closeString) {
+        inString = false;
+        result.push(char);
+        continue;
+      }
+
+      result.push("\\");
+      result.push(char);
+      continue;
+    }
+
+    result.push(char);
+  }
+
+  return result.join("");
 }

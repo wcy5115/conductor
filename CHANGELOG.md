@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.4] - 2026-06-30
+
+### Fixed
+
+- Repaired LLM JSON parsing when quotation marks are left unescaped inside
+  string values, while still trying normal JSON parsing first for clean
+  responses.
+
+## [0.1.3] - 2026-06-28
 
 ### Fixed
 
@@ -58,4 +66,3 @@ Initial public preview.
 - Prepared example runners for public use by removing local machine paths.
 - Updated provider documentation to match the current OpenRouter default.
 - Strengthened ignore rules for local environment files.
-
